@@ -1,0 +1,19 @@
+apiVersion: messaging.knative.dev/v1
+kind: Channel
+metadata:
+  name: download-channel
+  namespace: image-processing
+spec:
+  channelTemplate:
+    apiVersion: messaging.knative.dev/v1
+    kind: InMemoryChannel
+---
+apiVersion: messaging.knative.dev/v1
+kind: Channel
+metadata:
+  name: process-channel
+  namespace: image-processing
+spec:
+  channelTemplate:
+    apiVersion: messaging.knative.dev/v1
+    kind: InMemoryChannel
