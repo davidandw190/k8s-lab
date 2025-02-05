@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: minio-config
+  namespace: minio-system
+  labels:
+    app.kubernetes.io/name: minio
+data:
+  MINIO_BROWSER_REDIRECT_URL: 'http://localhost:9001'
+  MINIO_PROMETHEUS_URL: 'http://prometheus-server:9090'
+  MINIO_PROMETHEUS_JOB_ID: 'minio-job'
+  MINIO_PROMETHEUS_AUTH_TYPE: 'public'
