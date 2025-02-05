@@ -1,0 +1,47 @@
+apiVersion: eventing.knative.dev/v1
+kind: Trigger
+metadata:
+  name: download-trigger
+  namespace: image-processing
+spec:
+  broker: image-processing-broker
+  filter:
+    attributes:
+      type: dev.knative.samples.image.download
+  subscriber:
+    ref:
+      apiVersion: serving.knative.dev/v1
+      kind: Service
+      name: image-downloader
+---
+apiVersion: eventing.knative.dev/v1
+kind: Trigger
+metadata:
+  name: process-trigger
+  namespace: image-processing
+spec:
+  broker: image-processing-broker
+  filter:
+    attributes:
+      type: dev.knative.samples.image.downloaded
+  subscriber:
+    ref:
+      apiVersion: serving.knative.dev/v1
+      kind: Service
+      name: image-processor
+---
+apiVersion: eventing.knative.dev/v1
+kind: Trigger
+metadata:
+  name: error-trigger
+  namespace: image-processing
+spec:
+  broker: image-processing-broker
+  filter:
+    attributes:
+      type: dev.knative.samples.image.error
+  subscriber:
+    ref:
+      apiVersion: v1
+      kind: Service
+      name: error-handler

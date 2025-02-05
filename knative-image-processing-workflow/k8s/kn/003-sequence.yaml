@@ -1,0 +1,23 @@
+apiVersion: flows.knative.dev/v1
+kind: Sequence
+metadata:
+  name: image-processing-sequence
+  namespace: image-processing
+spec:
+  channelTemplate:
+    apiVersion: messaging.knative.dev/v1
+    kind: InMemoryChannel
+  steps:
+  - ref:
+      apiVersion: serving.knative.dev/v1
+      kind: Service
+      name: image-downloader
+  - ref:
+      apiVersion: serving.knative.dev/v1
+      kind: Service
+      name: image-processor
+  reply:
+    ref:
+      kind: Broker
+      apiVersion: eventing.knative.dev/v1
+      name: image-processing-broker
