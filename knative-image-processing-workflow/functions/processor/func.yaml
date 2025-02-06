@@ -1,0 +1,21 @@
+specVersion: 0.36.0
+name: processor
+runtime: python
+registry: docker.io/davidandw190
+image: docker.io/davidandw190/processor:latest
+namespace: image-processing
+created: 2025-02-06T12:01:53.054490801+02:00
+build:
+  builder: pack
+  buildEnvs:
+  - name: PYTHONUNBUFFERED
+    value: "1"
+run:
+  envs:
+  - name: MINIO_ROOT_USER
+    value: ${MINIO_ROOT_USER}
+  - name: MINIO_ROOT_PASSWORD
+    value: ${MINIO_ROOT_PASSWORD}
+deploy:
+  namespace: image-processing
+  image: docker.io/davidandw190/processor@sha256:3ca1f954f1625d6263db3c53e08303f0d15af946b7f0db2e602f707df46ff9fd

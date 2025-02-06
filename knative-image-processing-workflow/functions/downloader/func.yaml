@@ -19,5 +19,8 @@ run:
 deploy:
   namespace: image-processing
   image: docker.io/davidandw190/downloader@sha256:3e2cb18eb0b83215e646673df1ad0a212e3331fd41456c618e4bca2bb062841f
-  annotations:
-    autoscaling.knative.dev/maxScale: '5'
+  spec:
+    template:
+      metadata:
+        annotations:
+          autoscaling.knative.dev/maxScale: "5"
