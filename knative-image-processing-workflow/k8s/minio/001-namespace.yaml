@@ -18,5 +18,5 @@ spec:
     requests.cpu: "2"
     requests.memory: 4Gi
     limits.cpu: "4"
-    limits.memory: 8Gi
-    requests.storage: 10Gi
+    limits.memory: 15Gi
+    requests.storage: 20Gi

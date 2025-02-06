@@ -1,0 +1,23 @@
+specVersion: 0.36.0
+name: downloader
+runtime: python
+registry: docker.io/davidandw190
+image: docker.io/davidandw190/downloader:latest
+namespace: image-processing
+created: 2025-02-06T00:33:20.274209301+02:00
+build:
+  builder: pack
+  buildEnvs:
+  - name: PYTHONUNBUFFERED
+    value: '1'
+run:
+  envs:
+  - name: MINIO_ROOT_USER
+    value: ${MINIO_ROOT_USER}
+  - name: MINIO_ROOT_PASSWORD
+    value: ${MINIO_ROOT_PASSWORD}
+deploy:
+  namespace: image-processing
+  image: docker.io/davidandw190/downloader@sha256:3e2cb18eb0b83215e646673df1ad0a212e3331fd41456c618e4bca2bb062841f
+  annotations:
+    autoscaling.knative.dev/maxScale: '5'
