@@ -9,18 +9,15 @@ build:
   builder: pack
   buildEnvs:
   - name: PYTHONUNBUFFERED
-    value: '1'
+    value: "1"
 run:
   envs:
   - name: MINIO_ROOT_USER
-    value: ${MINIO_ROOT_USER}
+    value: minioadmin
   - name: MINIO_ROOT_PASSWORD
-    value: ${MINIO_ROOT_PASSWORD}
+    value: minioadmin
 deploy:
   namespace: image-processing
-  image: docker.io/davidandw190/downloader@sha256:3e2cb18eb0b83215e646673df1ad0a212e3331fd41456c618e4bca2bb062841f
-  spec:
-    template:
-      metadata:
-        annotations:
-          autoscaling.knative.dev/maxScale: "5"
+  image: docker.io/davidandw190/downloader@sha256:5ca25c2473c745378c92c57f25e4a2bfb05c119c4a35d4e3c5c15955fb24b837
+  annotations:
+    serving.knative.dev/mount-secret: minio-creds

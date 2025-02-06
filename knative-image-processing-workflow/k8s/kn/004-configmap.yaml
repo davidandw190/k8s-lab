@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: image-processing-config
+  namespace: image-processing
+data:
+  EVENT_SOURCE: "image-processing-system"
+  BROKER_URL: "http://broker-ingress.knative-eventing.svc.cluster.local/image-processing/image-processing-broker"
+  MAX_RETRIES: "3"
+  JPEG_QUALITY: "85"
+  MAX_IMAGE_SIZE: "800"

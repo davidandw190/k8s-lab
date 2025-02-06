@@ -7,12 +7,12 @@ spec:
   broker: image-processing-broker
   filter:
     attributes:
-      type: dev.knative.samples.image.download
+      type: dev.knative.samples.image.download.requested
   subscriber:
     ref:
       apiVersion: serving.knative.dev/v1
       kind: Service
-      name: image-downloader
+      name: downloader
 ---
 apiVersion: eventing.knative.dev/v1
 kind: Trigger
@@ -23,12 +23,12 @@ spec:
   broker: image-processing-broker
   filter:
     attributes:
-      type: dev.knative.samples.image.downloaded
+      type: dev.knative.samples.image.download.completed
   subscriber:
     ref:
       apiVersion: serving.knative.dev/v1
       kind: Service
-      name: image-processor
+      name: processor
 ---
 apiVersion: eventing.knative.dev/v1
 kind: Trigger
@@ -42,6 +42,6 @@ spec:
       type: dev.knative.samples.image.error
   subscriber:
     ref:
-      apiVersion: v1
+      apiVersion: serving.knative.dev/v1
       kind: Service
       name: error-handler
