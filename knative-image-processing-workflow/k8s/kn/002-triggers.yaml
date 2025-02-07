@@ -1,13 +1,14 @@
 apiVersion: eventing.knative.dev/v1
 kind: Trigger
 metadata:
-  name: download-trigger
+  name: storage-trigger
   namespace: image-processing
 spec:
   broker: image-processing-broker
   filter:
     attributes:
-      type: dev.knative.samples.image.download.requested
+      type: image.storage.requested
+      category: storage
   subscriber:
     ref:
       apiVersion: serving.knative.dev/v1
@@ -17,13 +18,14 @@ spec:
 apiVersion: eventing.knative.dev/v1
 kind: Trigger
 metadata:
-  name: process-trigger
+  name: processing-trigger
   namespace: image-processing
 spec:
   broker: image-processing-broker
   filter:
     attributes:
-      type: dev.knative.samples.image.download.completed
+      type: image.storage.completed
+      category: processing
   subscriber:
     ref:
       apiVersion: serving.knative.dev/v1
@@ -39,7 +41,7 @@ spec:
   broker: image-processing-broker
   filter:
     attributes:
-      type: dev.knative.samples.image.error
+      type: image.error
   subscriber:
     ref:
       apiVersion: serving.knative.dev/v1

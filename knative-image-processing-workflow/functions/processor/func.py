@@ -100,15 +100,16 @@ def process_image(image_data: bytes) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Image processing failed: {str(e)}")
         raise
-
+    
 def create_cloud_event_response(event_type: str, data: dict, source: str) -> CloudEvent:
     attributes = {
         "id": f"processor-{int(time.time())}",
         "specversion": "1.0",
         "type": event_type,
-        "source": source,
+        "source": f"image-processing/{source}",
         "time": datetime.now(timezone.utc).isoformat(),
-        "datacontenttype": "application/json"
+        "datacontenttype": "application/json",
+        "category": "processing"
     }
     return CloudEvent(attributes, data)
 
@@ -178,21 +179,21 @@ def main(context: Context) -> CloudEvent:
             "timestamp": int(time.time())
         }
         return create_cloud_event_response(
-            "dev.knative.samples.image.processing.completed",
+            "image.processing.completed",  
             response_data,
-            source="image-processor"
+            source="processor"
         )
         
     except Exception as e:
         logger.error("Error processing image: %s", str(e), exc_info=True)
-        error_data = {
-            "error": str(e),
-            "error_type": type(e).__name__,
-            "original_event": context.cloud_event.data,
-            "timestamp": int(time.time())
-        }
         return create_cloud_event_response(
-            "dev.knative.samples.image.error",
-            error_data,
-            source="image-processor"
+            "image.error", 
+            {
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "original_event": context.cloud_event.data,
+                "component": "processor",
+                "timestamp": int(time.time())
+            },
+            source="processor"
         )

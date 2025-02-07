@@ -107,10 +107,13 @@ def create_cloud_event_response(event_type: str, data: dict) -> CloudEvent:
     return CloudEvent({
         "specversion": "1.0",
         "type": event_type,
-        "source": "knative/eventing/downloader",
-        "id": f"download-{int(time.time())}",
-        "time": datetime.now(timezone.utc).isoformat()
+        "source": "image-processing/storage",
+        "id": f"storage-{int(time.time())}",
+        "time": datetime.now(timezone.utc).isoformat(),
+        "category": "processing",  
+        "datacontenttype": "application/json"
     }, data)
+    
 
 def main(context: Context) -> CloudEvent:
     logger.info(f"Processing event: {context.cloud_event}")
@@ -131,17 +134,18 @@ def main(context: Context) -> CloudEvent:
         result = downloader.download_and_store_image(image_url)
         
         return create_cloud_event_response(
-            "dev.knative.samples.image.download.completed",
+            "image.storage.completed",
             result
         )
         
     except Exception as e:
         logger.error(f"Error in main handler: {str(e)}", exc_info=True)
         return create_cloud_event_response(
-            "dev.knative.samples.image.error",
+            "image.error",
             {
                 "error": str(e),
                 "error_type": type(e).__name__,
-                "original_url": image_url
+                "original_url": image_url,
+                "component": "storage" 
             }
         )
