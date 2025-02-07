@@ -18,6 +18,6 @@ run:
     value: minioadmin
 deploy:
   namespace: image-processing
-  image: docker.io/davidandw190/downloader@sha256:5ca25c2473c745378c92c57f25e4a2bfb05c119c4a35d4e3c5c15955fb24b837
+  image: docker.io/davidandw190/downloader@sha256:39456b8537f95d16c3292a88136860fbdf5485e0e9588a100f1d858ae9194aba
   annotations:
     serving.knative.dev/mount-secret: minio-creds

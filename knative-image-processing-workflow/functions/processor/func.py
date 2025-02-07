@@ -1,132 +1,198 @@
+from parliament import Context
 from cloudevents.http import CloudEvent
-from typing import Any, Dict
-import functions_framework
 from minio import Minio
-import os
+from minio.error import S3Error
 from PIL import Image, ImageEnhance
+from datetime import datetime, timezone
+from typing import Any, Dict
+import os
 import io
-import logging
 import time
+import json
+import logging
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-minio_client = Minio(
-    "minio.image-processing:9000",
-    access_key=os.getenv("MINIO_ROOT_USER"),
-    secret_key=os.getenv("MINIO_ROOT_PASSWORD"),
-    secure=False
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
+logger = logging.getLogger(__name__)
 
 RAW_BUCKET = "raw-images"
 PROCESSED_BUCKET = "processed-images"
 MAX_RETRIES = 3
 MAX_IMAGE_SIZE = (800, 800)
 JPEG_QUALITY = 85
+MINIO_ENDPOINT = "minio.image-processing.svc.cluster.local:9000"
 
-def ensure_bucket() -> None:
-    """Ensure processed bucket exists with error handling"""
+def initialize_minio_client() -> Minio:
+    access_key = os.getenv("MINIO_ROOT_USER")
+    secret_key = os.getenv("MINIO_ROOT_PASSWORD")
+    if not access_key or not secret_key:
+        logger.error("MinIO credentials not available in environment.")
+        raise RuntimeError("MinIO credentials not available")
+    
+    client = Minio(
+        MINIO_ENDPOINT,
+        access_key=access_key,
+        secret_key=secret_key,
+        secure=False
+    )
+    
     try:
-        if not minio_client.bucket_exists(PROCESSED_BUCKET):
-            logger.info(f"Creating bucket: {PROCESSED_BUCKET}")
-            minio_client.make_bucket(PROCESSED_BUCKET)
+        client.list_buckets()
+        logger.info("Successfully connected to MinIO and listed buckets.")
+    except S3Error as se:
+        logger.error(f"S3 Error: {se.code} - {se.message} (Request ID: {se.request_id})")
+        raise
     except Exception as e:
-        logger.error(f"Failed to ensure bucket exists: {str(e)}")
+        logger.error(f"Error connecting to MinIO: {str(e)}")
+        raise
+    
+    return client
+
+minio_client = initialize_minio_client()
+
+def ensure_bucket(bucket: str) -> None:
+    try:
+        if not minio_client.bucket_exists(bucket):
+            logger.info(f"Creating bucket: {bucket}")
+            minio_client.make_bucket(bucket)
+            logger.info(f"Successfully created bucket: {bucket}")
+    except Exception as e:
+        logger.error(f"Failed to ensure bucket '{bucket}' exists: {str(e)}")
         raise
 
 def process_image(image_data: bytes) -> Dict[str, Any]:
     try:
-        img = Image.open(io.BytesIO(image_data))
+        if not image_data:
+            raise ValueError("Received empty image data")
+            
+        image_buffer = io.BytesIO(image_data)
+        image_buffer.seek(0) 
         
-        processed = img.convert('L')
+        img = Image.open(image_buffer)
+        img.verify()  
+        image_buffer.seek(0)  
+        
+        img = Image.open(image_buffer)
+        logger.info(f"Successfully opened image of format {img.format} and size {img.size}")
+        
+        processed = img.convert("L")
         
         processed.thumbnail(MAX_IMAGE_SIZE, Image.LANCZOS)
+        logger.info(f"Resized image to fit within {MAX_IMAGE_SIZE}.")
         
         enhancer = ImageEnhance.Contrast(processed)
         processed = enhancer.enhance(1.2)
+        logger.info("Enhanced image contrast.")
         
-        output = io.BytesIO()
-        processed.save(output, format='JPEG', quality=JPEG_QUALITY)
+        output_buffer = io.BytesIO()
+        processed.save(output_buffer, format="JPEG", quality=JPEG_QUALITY)
+        processed_bytes = output_buffer.getvalue()
+        size_bytes = output_buffer.tell()
         
         return {
-            'data': output.getvalue(),
-            'format': 'JPEG',
-            'size': output.tell(),
-            'dimensions': processed.size
+            "data": processed_bytes,
+            "format": "JPEG",
+            "size": size_bytes,
+            "dimensions": processed.size
         }
     except Exception as e:
         logger.error(f"Image processing failed: {str(e)}")
         raise
 
-@functions_framework.cloud_event
-def handle_event(cloud_event: CloudEvent) -> dict[str, Any]:
-    """Handle incoming CloudEvents for image processing"""
+def create_cloud_event_response(event_type: str, data: dict, source: str) -> CloudEvent:
+    attributes = {
+        "id": f"processor-{int(time.time())}",
+        "specversion": "1.0",
+        "type": event_type,
+        "source": source,
+        "time": datetime.now(timezone.utc).isoformat(),
+        "datacontenttype": "application/json"
+    }
+    return CloudEvent(attributes, data)
+
+def main(context: Context) -> CloudEvent:
+    logger.info("Received event for image processing: %s", context.cloud_event)
+    image_bucket = None
+    image_filename = None
+
     try:
-        logger.info(f"Received event: {cloud_event.type} from {cloud_event.source}")
-
-        event_data = cloud_event.data
-        bucket = event_data.get("bucket")
-        filename = event_data.get("filename")
+        event_data = context.cloud_event.data
+        if isinstance(event_data, str):
+            event_data = json.loads(event_data)
+        logger.info("Parsed event data: %s", event_data)
         
-        if not all([bucket, filename]):
-            raise ValueError("Missing required file information in event data")
+        image_bucket = event_data.get("bucket")
+        image_filename = event_data.get("filename")
+        if not all([image_bucket, image_filename]):
+            raise ValueError("Missing required file information in event data (bucket and/or filename).")
         
-        for attempt in range(MAX_RETRIES):
+        for attempt in range(1, MAX_RETRIES + 1):
             try:
-                data = minio_client.get_object(bucket, filename).read()
+                logger.info(f"Attempt {attempt} to download image: {image_filename} from bucket: {image_bucket}")
+                response = minio_client.get_object(image_bucket, image_filename)
+                raw_image_data = response.read()
+                response.close()
+                response.release_conn()
+                logger.info("Successfully downloaded image from MinIO.")
                 break
-            except Exception as e:
-                if attempt == MAX_RETRIES - 1:
+            except Exception as download_error:
+                logger.warning(f"Download attempt {attempt} failed: {str(download_error)}")
+                if attempt == MAX_RETRIES:
                     raise
-                logger.warning(f"Download attempt {attempt + 1} failed: {str(e)}")
                 time.sleep(1)
-
-        processed_result = process_image(data)
         
-        ensure_bucket()
+        processed_result = process_image(raw_image_data)
         
-        processed_filename = f"processed_{filename}"
+        ensure_bucket(PROCESSED_BUCKET)
         
-        for attempt in range(MAX_RETRIES):
+        processed_filename = f"processed_{image_filename}"
+        
+        for attempt in range(1, MAX_RETRIES + 1):
             try:
+                logger.info(f"Attempt {attempt} to upload processed image: {processed_filename} to bucket: {PROCESSED_BUCKET}")
+                processed_data = processed_result["data"]
                 minio_client.put_object(
                     PROCESSED_BUCKET,
                     processed_filename,
-                    io.BytesIO(processed_result['data']),
-                    length=processed_result['size'],
-                    content_type=f"image/{processed_result['format'].lower()}"
+                    io.BytesIO(processed_data),
+                    length=processed_result["size"],
+                    content_type="image/jpeg"
                 )
+                logger.info("Successfully uploaded processed image to MinIO.")
                 break
-            except Exception as e:
-                if attempt == MAX_RETRIES - 1:
+            except Exception as upload_error:
+                logger.warning(f"Upload attempt {attempt} failed: {str(upload_error)}")
+                if attempt == MAX_RETRIES:
                     raise
-                logger.warning(f"Upload attempt {attempt + 1} failed: {str(e)}")
                 time.sleep(1)
-
-        logger.info(f"Successfully processed image: {processed_filename}")
-        return {
-            "type": "dev.knative.samples.image.processing.completed",
-            "source": "image-processor",
-            "data": {
-                "bucket": PROCESSED_BUCKET,
-                "filename": processed_filename,
-                "original_filename": filename,
-                "original_bucket": bucket,
-                "size": processed_result['size'],
-                "dimensions": processed_result['dimensions'],
-                "timestamp": int(time.time())
-            }
+        
+        response_data = {
+            "processed_bucket": PROCESSED_BUCKET,
+            "processed_filename": processed_filename,
+            "original_bucket": image_bucket,
+            "original_filename": image_filename,
+            "size": processed_result["size"],
+            "dimensions": processed_result["dimensions"],
+            "timestamp": int(time.time())
         }
-
+        return create_cloud_event_response(
+            "dev.knative.samples.image.processing.completed",
+            response_data,
+            source="image-processor"
+        )
+        
     except Exception as e:
-        logger.error(f"Error processing image: {str(e)}")
-        return {
-            "type": "dev.knative.samples.image.error",
-            "source": "image-processor",
-            "data": {
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "original_event": cloud_event.data,
-                "timestamp": int(time.time())
-            }
+        logger.error("Error processing image: %s", str(e), exc_info=True)
+        error_data = {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "original_event": context.cloud_event.data,
+            "timestamp": int(time.time())
         }
+        return create_cloud_event_response(
+            "dev.knative.samples.image.error",
+            error_data,
+            source="image-processor"
+        )
