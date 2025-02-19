@@ -9,6 +9,7 @@ spec:
     attributes:
       type: image.storage.requested
       category: storage
+
   subscriber:
     ref:
       apiVersion: serving.knative.dev/v1

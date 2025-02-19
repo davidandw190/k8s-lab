@@ -8,6 +8,7 @@ metadata:
     app.kubernetes.io/component: object-storage
   annotations:
     service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-internal: "true"
 spec:
   type: ClusterIP
   ports:
