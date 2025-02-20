@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault
+  namespace: minio-system
+spec:
+  type: ExternalName
+  externalName: kubernetes.docker.internal
+  ports:
+  - port: 8200
+    targetPort: 8200

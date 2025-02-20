@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+  namespace: minio-system
+spec:
+  serviceName: minio
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/agent-inject-status: "update"
+        vault.hashicorp.com/role: "minio-role"
+        vault.hashicorp.com/agent-inject-secret-minio-config: "minio/data/config"
+        vault.hashicorp.com/agent-inject-template-minio-config: |
+          {{- with secret "minio/data/config" -}}
+          export MINIO_ROOT_USER="{{ .Data.data.MINIO_ROOT_USER }}"
+          export MINIO_ROOT_PASSWORD="{{ .Data.data.MINIO_ROOT_PASSWORD }}"
+          {{- end -}}
+        vault.hashicorp.com/agent-address: "http://vault.minio-system.svc:8200"
+    spec:
+      serviceAccountName: minio-vault-auth
+      containers:
+      - name: minio
+        image: minio/minio:latest
+        command:
+        - "/bin/sh"
+        - "-c"
+        args:
+        - |
+          if [ -f /vault/secrets/minio-config ]; then
+            source /vault/secrets/minio-config
+          fi
+          minio server /data --console-address ":9001"
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "500m"
+            memory: "1Gi"
+        ports:
+        - containerPort: 9000
+          name: api
+        - containerPort: 9001
+          name: console
+        volumeMounts:
+        - name: data
+          mountPath: /data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 10Gi
