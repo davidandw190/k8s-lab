@@ -1,0 +1,16 @@
+# security sensitive files
+.secrets/
+.certs/
+*.crt
+*.key
+*.pem
+*.csr
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.truststore
+
+# vault related
+.vault-token
+vault.log
