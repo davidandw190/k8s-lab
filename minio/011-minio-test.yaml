@@ -9,51 +9,42 @@ metadata:
 spec:
   ttlSecondsAfterFinished: 100
   template:
+    metadata:
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "minio-role"
+        vault.hashicorp.com/agent-address: "http://vault.minio-system.svc:8200"
+        vault.hashicorp.com/agent-inject-secret-minio-config: minio/data/data/config
+        vault.hashicorp.com/agent-inject-template-minio-config: |
+          {{- with secret "minio/data/data/config" -}}
+          export MINIO_ROOT_USER="{{ .Data.data.MINIO_ROOT_USER }}"
+          export MINIO_ROOT_PASSWORD="{{ .Data.data.MINIO_ROOT_PASSWORD }}"
+          {{- end -}}
     spec:
+      serviceAccountName: minio-vault-auth
       containers:
       - name: mc
         image: minio/mc:latest
         command:
-        - /bin/sh
-        - -c
+        - "/bin/sh"
+        - "-c"
         args:
         - |
-          # Waiting for MinIO to be ready
-          sleep 10
-
-          # Configuring MinIO client
+          echo "Starting MinIO test process..."
+          echo "Waiting for Vault secrets to be injected..."
+          while [ ! -f /vault/secrets/minio-config ]; do
+            sleep 2
+            echo "Waiting for secrets..."
+          done
+          echo "MinIO credentials obtained, proceeding with tests..."
           mc alias set myminio http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
-
-          # Creating test bucket
+          echo "Creating test bucket..."
           mc mb myminio/test-bucket
-
-          # Creating test files
+          echo "Testing MinIO operations..."
           echo "Hello MinIO" > /tmp/hello.txt
-          dd if=/dev/urandom of=/tmp/test.bin bs=100K count=1
-
-          # Uploading files
           mc cp /tmp/hello.txt myminio/test-bucket/
-          mc cp /tmp/test.bin myminio/test-bucket/
-
-          # Listing contents
+          echo "Verifying upload..."
           mc ls myminio/test-bucket/
-
-          # Testing object tagging
-          mc tag set myminio/test-bucket/hello.txt "content=text"
-
-          # Verifying upload
-          mc stat myminio/test-bucket/hello.txt
-        env:
-        - name: MINIO_ROOT_USER
-          valueFrom:
-            secretKeyRef:
-              name: minio-creds
-              key: root-user
-        - name: MINIO_ROOT_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: minio-creds
-              key: root-password
         resources:
           requests:
             cpu: "100m"

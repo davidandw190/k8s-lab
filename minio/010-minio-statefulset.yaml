@@ -3,6 +3,8 @@ kind: StatefulSet
 metadata:
   name: minio
   namespace: minio-system
+  labels:
+    app: minio
 spec:
   serviceName: minio
   replicas: 1
@@ -17,13 +19,13 @@ spec:
         vault.hashicorp.com/agent-inject: "true"
         vault.hashicorp.com/agent-inject-status: "update"
         vault.hashicorp.com/role: "minio-role"
-        vault.hashicorp.com/agent-inject-secret-minio-config: "minio/data/config"
+        vault.hashicorp.com/agent-address: "http://vault.minio-system.svc:8200"
+        vault.hashicorp.com/agent-inject-secret-minio-config: minio/data/data/config
         vault.hashicorp.com/agent-inject-template-minio-config: |
-          {{- with secret "minio/data/config" -}}
+          {{- with secret "minio/data/data/config" -}}
           export MINIO_ROOT_USER="{{ .Data.data.MINIO_ROOT_USER }}"
           export MINIO_ROOT_PASSWORD="{{ .Data.data.MINIO_ROOT_PASSWORD }}"
-          {{- end -}}
-        vault.hashicorp.com/agent-address: "http://vault.minio-system.svc:8200"
+          {{- end -}}        
     spec:
       serviceAccountName: minio-vault-auth
       containers:
@@ -37,7 +39,7 @@ spec:
           if [ -f /vault/secrets/minio-config ]; then
             source /vault/secrets/minio-config
           fi
-          minio server /data --console-address ":9001"
+          exec minio server /data --console-address ":9001"
         resources:
           requests:
             cpu: "250m"
@@ -57,7 +59,8 @@ spec:
   - metadata:
       name: data
     spec:
-      accessModes: [ "ReadWriteOnce" ]
+      accessModes:
+      - ReadWriteOnce
       resources:
         requests:
           storage: 10Gi

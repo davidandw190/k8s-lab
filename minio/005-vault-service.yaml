@@ -4,8 +4,9 @@ metadata:
   name: vault
   namespace: minio-system
 spec:
-  type: ExternalName
-  externalName: kubernetes.docker.internal
+  type: ClusterIP
+  selector:
+    app: vault
   ports:
   - port: 8200
     targetPort: 8200
