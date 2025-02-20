@@ -4,7 +4,7 @@ bootstrap:
 		--owner=davidandw190 \
 		--repository=k8s-lab \
 		--branch=main \
-		--path=flux-podinfo \
+		--path=clusters/podinfo \
 		--read-write-key=true \
 		--components-extra='image-reflector-controller,image-automation-controller' \
 		--personal
