@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: image-processing
+  labels:
+    name: image-processing
+    environment: production
+    app.kubernetes.io/name: image-processing
+    app.kubernetes.io/component: image-processing
+    app.kubernetes.io/part-of: image-processing-system
