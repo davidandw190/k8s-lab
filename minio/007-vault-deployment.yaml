@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vault
+  namespace: minio-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vault
+  template:
+    metadata:
+      labels:
+        app: vault
+    spec:
+      serviceAccountName: minio-vault-auth
+      containers:
+      - name: vault
+        image: hashicorp/vault:1.13.3
+        args:
+        - "server"
+        - "-dev"
+        - "-dev-root-token-id=root"
+        - "-dev-listen-address=0.0.0.0:8200"
+        ports:
+        - containerPort: 8200
+        env:
+        - name: VAULT_DEV_ROOT_TOKEN_ID
+          value: "root"
+        - name: VAULT_ADDR
+          value: "http://localhost:8200"
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+        securityContext:
+          capabilities:
+            add: [ "IPC_LOCK" ]

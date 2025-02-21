@@ -3,9 +3,6 @@ kind: Job
 metadata:
   name: minio-test
   namespace: minio-system
-  labels:
-    app.kubernetes.io/name: minio
-    app.kubernetes.io/component: test
 spec:
   ttlSecondsAfterFinished: 100
   template:
@@ -13,8 +10,7 @@ spec:
       annotations:
         vault.hashicorp.com/agent-inject: "true"
         vault.hashicorp.com/role: "minio-role"
-        vault.hashicorp.com/agent-address: "http://vault.minio-system.svc:8200"
-        vault.hashicorp.com/agent-inject-secret-minio-config: minio/data/data/config
+        vault.hashicorp.com/agent-inject-secret-minio-config: "minio/data/data/config"
         vault.hashicorp.com/agent-inject-template-minio-config: |
           {{- with secret "minio/data/data/config" -}}
           export MINIO_ROOT_USER="{{ .Data.data.MINIO_ROOT_USER }}"
@@ -32,11 +28,19 @@ spec:
         - |
           echo "Starting MinIO test process..."
           echo "Waiting for Vault secrets to be injected..."
+          timeout=60
+          count=0
           while [ ! -f /vault/secrets/minio-config ]; do
             sleep 2
-            echo "Waiting for secrets..."
+            count=$((count + 2))
+            echo "Waiting for secrets... ($count seconds)"
+            if [ $count -ge $timeout ]; then
+              echo "Timeout waiting for secrets"
+              exit 1
+            fi
           done
           echo "MinIO credentials obtained, proceeding with tests..."
+          source /vault/secrets/minio-config
           mc alias set myminio http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
           echo "Creating test bucket..."
           mc mb myminio/test-bucket
