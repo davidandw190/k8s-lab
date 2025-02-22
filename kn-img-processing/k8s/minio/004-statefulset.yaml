@@ -23,12 +23,13 @@ spec:
       annotations:
         vault.hashicorp.com/agent-inject: "true"
         vault.hashicorp.com/role: "minio-role"
-        vault.hashicorp.com/agent-inject-secret-minio-config: "minio-config"
+        vault.hashicorp.com/agent-inject-secret-minio-config: "minio/data/data/config"
         vault.hashicorp.com/agent-inject-template-minio-config: |
           {{- with secret "minio/data/data/config" -}}
           export MINIO_ROOT_USER="{{ .Data.data.MINIO_ROOT_USER }}"
           export MINIO_ROOT_PASSWORD="{{ .Data.data.MINIO_ROOT_PASSWORD }}"
           {{- end -}}
+        vault.hashicorp.com/address: "http://vault.image-processing.svc:8200"
     spec:
       serviceAccountName: minio-vault-auth
       containers:
@@ -67,14 +68,15 @@ spec:
             command: [ "sh", "-c", "minio health" ]
           initialDelaySeconds: 20
           periodSeconds: 30
-      volumeClaimTemplates:
-      - metadata:
-          name: data
-          labels:
-            app.kubernetes.io/name: minio-data
-            app.kubernetes.io/instance: minio
-        spec:
-          accessModes: [ "ReadWriteOnce" ]
-          resources:
-            requests:
-              storage: 10Gi
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+      labels:
+        app.kubernetes.io/name: minio-data
+        app.kubernetes.io/instance: minio
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 10Gi
