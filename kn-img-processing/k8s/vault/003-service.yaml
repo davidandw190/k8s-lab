@@ -3,6 +3,13 @@ kind: Service
 metadata:
   name: vault
   namespace: image-processing
+  labels:
+    app.kubernetes.io/name: vault
+    app.kubernetes.io/instance: vault
+    app.kubernetes.io/component: vault
+    app.kubernetes.io/part-of: image-processing-system
+  annotations:
+    description: "Service exposing Vault"
 spec:
   type: ClusterIP
   sessionAffinity: ClientIP
@@ -14,3 +21,4 @@ spec:
   ports:
   - port: 8200
     targetPort: 8200
+    name: vault

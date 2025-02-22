@@ -5,9 +5,13 @@ metadata:
   namespace: image-processing
   labels:
     app.kubernetes.io/name: minio
+    app.kubernetes.io/instance: minio
     app.kubernetes.io/component: object-storage
+    app.kubernetes.io/part-of: image-processing-system
   annotations:
     service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+    description: "MinIO API and Console access"
 spec:
   type: ClusterIP
   ports:
@@ -28,8 +32,12 @@ metadata:
   name: minio-headless
   namespace: image-processing
   labels:
-    app.kubernetes.io/name: minio
+    app.kubernetes.io/name: minio-headless
+    app.kubernetes.io/instance: minio
     app.kubernetes.io/component: object-storage
+    app.kubernetes.io/part-of: image-processing-system
+  annotations:
+    description: "Headless service for MinIO statefulset"
 spec:
   clusterIP: None
   ports:

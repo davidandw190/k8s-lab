@@ -4,8 +4,10 @@ metadata:
   name: minio-data
   namespace: image-processing
   labels:
-    app.kubernetes.io/name: minio
+    app.kubernetes.io/name: minio-data
+    app.kubernetes.io/instance: minio
     app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: image-processing-system
 spec:
   accessModes:
   - ReadWriteOnce

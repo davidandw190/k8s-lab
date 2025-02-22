@@ -3,12 +3,12 @@ kind: ClusterRoleBinding
 metadata:
   name: role-tokenreview-binding
   labels:
-    app.kubernetes.io/name: minio
+    app.kubernetes.io/name: minio-vault-auth
     app.kubernetes.io/component: auth
-    app.kubernetes.io/part-of: storage-system
+    app.kubernetes.io/part-of: image-processing-system
   annotations:
-    description: 'Enables Vault to validate Kubernetes service account tokens'
-    security-level: 'critical'
+    description: "Enables Vault to validate Kubernetes service account tokens"
+    security-level: "critical"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -16,4 +16,4 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: minio-vault-auth
-  namespace: minio-system
+  namespace: image-processing

@@ -4,9 +4,10 @@ metadata:
   name: vault-config
   namespace: image-processing
   labels:
-    app.kubernetes.io/name: vault
-    app.kubernetes.io/component: policy
-    app.kubernetes.io/part-of: storage-system
+    app.kubernetes.io/name: vault-config
+    app.kubernetes.io/instance: vault
+    app.kubernetes.io/component: config
+    app.kubernetes.io/part-of: image-processing-system
   annotations:
     description: "Vault policy configuration for MinIO access"
 data:
@@ -14,7 +15,6 @@ data:
     path "minio/*" {
       capabilities = ["read", "list"]
     }
-
     path "sys/audit/*" {
       capabilities = ["read"]
     }
