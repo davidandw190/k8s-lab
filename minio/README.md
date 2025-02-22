@@ -1,4 +1,4 @@
-# MinIO Setup with Vault-Managed Secrets
+# MinIO K8s Setup with Terraform Vault-Managed Secrets
 
 This is a brief overview explaining how to deploy this MinIO configuration in a K8s cluster with secret management handled by HashiCorp Vault. The setup uses the Vault Agent Injector to automatically inject MinIO credentials into pods.
 
@@ -15,8 +15,21 @@ helm install vault-injector hashicorp/vault \
  --set "global.openshift=false" \
  --set "server.enabled=false" \
  --set "injector.enabled=true" \
- --set "injector.externalVaultAddr=http://vault.minio-system.svc:8200"
+ --set "injector.externalVaultAddr=http://vault.minio-system.svc:8200" \
+ --set "injector.logLevel=info" \
+ --set "injector.logFormat=standard"
+```
 
+You can check the injector deployment with:
+
+```bash
+kubectl get deploy -n minio-system -l app.kubernetes.io/name=vault-agent-injector
+```
+
+If you ecnounter confict errors during this process, check if you dont already ahve an interfering vault injector config in the cluster:
+
+``` bash
+kubectl get mutatingwebhookconfigurations | grep -i "vault"
 ```
 
 ### 2. Configure Hashicorp Vault
@@ -24,7 +37,6 @@ helm install vault-injector hashicorp/vault \
 Connect to the vault pod:
 
 ```bash
-
 kubectl exec -it deployment/vault -n minio-system -- /bin/sh
 ```
 
