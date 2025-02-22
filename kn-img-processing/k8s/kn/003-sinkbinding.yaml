@@ -1,15 +1,18 @@
 apiVersion: sources.knative.dev/v1
 kind: SinkBinding
 metadata:
-  name: image-processing-sink
+  name: image-processing-sinkbinding
   namespace: image-processing
+  labels:
+    app.kubernetes.io/name: image-processing-sinkbinding
+    app.kubernetes.io/part-of: image-processing-system
 spec:
   subject:
     apiVersion: v1
     kind: Service
     selector:
       matchLabels:
-        app.kubernetes.io/component: image-processing
+        app.kubernetes.io/role: event-source
   sink:
     ref:
       apiVersion: eventing.knative.dev/v1

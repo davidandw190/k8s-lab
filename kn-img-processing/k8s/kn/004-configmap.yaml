@@ -3,6 +3,9 @@ kind: ConfigMap
 metadata:
   name: image-processing-config
   namespace: image-processing
+  labels:
+    app.kubernetes.io/name: image-processing-config
+    app.kubernetes.io/part-of: image-processing-system
 data:
   EVENT_SOURCE: "image-processing-system"
   BROKER_URL: "http://broker-ingress.knative-eventing.svc.cluster.local/image-processing/image-processing-broker"

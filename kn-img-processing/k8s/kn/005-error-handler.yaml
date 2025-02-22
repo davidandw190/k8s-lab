@@ -3,8 +3,17 @@ kind: Service
 metadata:
   name: error-handler
   namespace: image-processing
+  labels:
+    app.kubernetes.io/name: error-handler
+    app.kubernetes.io/part-of: image-processing-system
 spec:
   template:
+    metadata:
+      labels:
+        app: error-handler
     spec:
       containers:
       - image: gcr.io/knative-releases/knative.dev/eventing-contrib/cmd/event_display
+        env:
+        - name: EVENT_SOURCE
+          value: "error-handler"
