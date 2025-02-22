@@ -9,6 +9,10 @@ metadata:
 data:
   EVENT_SOURCE: "image-processing-system"
   BROKER_URL: "http://broker-ingress.knative-eventing.svc.cluster.local/image-processing/image-processing-broker"
+  MINIO_ENDPOINT: "minio.image-processing.svc.cluster.local:9000"
+  RAW_BUCKET: "raw-images"
+  CONNECTION_TIMEOUT: "5"
+  MINIO_SECURE: "false"
   MAX_RETRIES: "3"
   JPEG_QUALITY: "85"
   MAX_IMAGE_SIZE: "800"
