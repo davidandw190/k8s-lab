@@ -128,10 +128,10 @@ def create_cloud_event_response(event_type: str, data: dict, config: Dict[str, A
     return CloudEvent({
         "specversion": "1.0",
         "type": event_type,
-        "source": config['event_source'],
+        "source": config['event_source'],  
         "id": f"storage-{int(time.time())}",
         "time": datetime.now(timezone.utc).isoformat(),
-        "category": "storage" if event_type == "image.storage.completed" else "error",
+        "category": "storage",  
         "datacontenttype": "application/json"
     }, data)
 
@@ -165,15 +165,29 @@ def main(context: Context) -> CloudEvent:
             config
         )
         
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Network error downloading image: {str(e)}")
+        return create_cloud_event_response(
+            "image.error.storage",
+            {
+                "error": str(e),
+                "error_type": "NetworkError",
+                "original_url": image_url,
+                "component": "storage",
+                "timestamp": int(time.time())
+            },
+            config if 'config' in locals() else get_config()
+        )
     except Exception as e:
         logger.error(f"Error in main handler: {str(e)}", exc_info=True)
         return create_cloud_event_response(
-            "image.error",
+            "image.error.storage",
             {
                 "error": str(e),
                 "error_type": type(e).__name__,
                 "original_url": image_url,
-                "component": "storage"
+                "component": "storage",
+                "timestamp": int(time.time())
             },
             config if 'config' in locals() else get_config()
-        )
+        )    

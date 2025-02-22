@@ -50,7 +50,7 @@ spec:
   broker: image-processing-broker
   filter:
     attributes:
-      type: image.error
+      type: image.error.storage, image.error.processing, image.error.validation
   subscriber:
     ref:
       apiVersion: serving.knative.dev/v1

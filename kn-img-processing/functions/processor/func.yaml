@@ -5,19 +5,61 @@ registry: docker.io/davidandw190
 image: docker.io/davidandw190/processor:latest
 namespace: image-processing
 created: 2025-02-06T12:01:53.054490801+02:00
+
 build:
   builder: pack
   buildEnvs:
   - name: PYTHONUNBUFFERED
     value: "1"
+
 run:
-  envs:
-  - name: MINIO_ROOT_USER
-    value: minioadmin
-  - name: MINIO_ROOT_PASSWORD
-    value: minioadmin
+  command: [ "/bin/sh", "-c" ]
+  args:
+  - |
+    # Wait for Vault secrets to be available before starting
+    echo "Waiting for Vault secrets..."
+    while [ ! -f /vault/secrets/minio-config ]; do
+      sleep 2
+      echo "Waiting for secrets..."
+    done
+
+    # Source MinIO credentials from Vault secrets
+    source /vault/secrets/minio-config
+
+    # Start the function framework
+    exec functions-framework --target main
+
 deploy:
   namespace: image-processing
-  image: docker.io/davidandw190/processor@sha256:4280c9614f3702b352b4d2c400825f3bdae51cb94e974bf2891ab1042afc6f41
-  annotations:
-    serving.knative.dev/mount-secret: minio-creds
+  template:
+    metadata:
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "minio-role"
+        vault.hashicorp.com/agent-pre-populate-only: "true"
+        vault.hashicorp.com/agent-inject-secret-minio-config: "minio/data/data/config"
+        vault.hashicorp.com/agent-inject-template-minio-config: |
+          {{- with secret "minio/data/data/config" -}}
+          export MINIO_ROOT_USER="{{ .Data.data.MINIO_ROOT_USER }}"
+          export MINIO_ROOT_PASSWORD="{{ .Data.data.MINIO_ROOT_PASSWORD }}"
+          {{- end -}}
+        vault.hashicorp.com/log-level: "info"
+        autoscaling.knative.dev/target: "1"
+    spec:
+      containerConcurrency: 0
+      containers:
+      - name: user-container
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: [ "ALL" ]
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
