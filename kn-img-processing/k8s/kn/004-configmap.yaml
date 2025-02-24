@@ -9,6 +9,8 @@ metadata:
 data:
   # event config
   EVENT_SOURCE: "image-processing-system"
+  EVENT_SOURCE_STORAGE: "image-processing/storage"
+  EVENT_SOURCE_PROCESSOR: "image-processing/processor"
   BROKER_URL: "http://broker-ingress.knative-eventing.svc.cluster.local/image-processing/image-processing-broker"
 
   # minio config
@@ -22,6 +24,6 @@ data:
   MAX_RETRIES: "3"
 
   # image processing
-  JPEG_QUALITY: "85" # Valid range: 1-100
-  MAX_IMAGE_SIZE: "800" # Valid range: 100-2000 pixels
-  CONTRAST_ENHANCEMENT: "1.2" # Valid range: 0.5-2.0
+  JPEG_QUALITY: "85" # valid range: 1-100
+  MAX_IMAGE_SIZE: "800"
+  CONTRAST_ENHANCEMENT: "1.2" # valid range: 0.5-2.0

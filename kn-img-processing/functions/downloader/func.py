@@ -6,7 +6,10 @@ import requests
 import time
 import logging
 import json
-import io 
+import io
+import uuid
+import threading
+from functools import wraps
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
@@ -16,11 +19,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+SECRETS_PATH = '/vault/secrets/minio-config'
+CONFIG_PATH = '/vault/secrets/minio-config'
+
 def get_config() -> Dict[str, Any]:
     return {
         'minio_endpoint': os.getenv('MINIO_ENDPOINT', 'minio.image-processing.svc.cluster.local:9000'),
         'raw_bucket': os.getenv('RAW_BUCKET', 'raw-images'),
-        'event_source': os.getenv('EVENT_SOURCE', 'image-processing/storage'),
+        'event_source': os.getenv('EVENT_SOURCE_STORAGE', 'image-processing/storage'),
         'max_retries': int(os.getenv('MAX_RETRIES', '3')),
         'connection_timeout': int(os.getenv('CONNECTION_TIMEOUT', '5')),
         'secure_connection': os.getenv('MINIO_SECURE', 'false').lower() == 'true'
@@ -32,20 +38,47 @@ class MinioClientManager:
         self.endpoint = config['minio_endpoint']
         self.max_retries = config['max_retries']
         self.secure = config['secure_connection']
-        
+
     def get_credentials(self) -> tuple[str, str]:
-        access_key = os.getenv("MINIO_ROOT_USER")
-        secret_key = os.getenv("MINIO_ROOT_PASSWORD")
-        
-        logger.info("Checking for Vault-injected MinIO credentials")
-        logger.debug(f"Using MinIO endpoint: {self.endpoint}")
-        logger.info(f"MinIO credentials present: access_key={'YES' if access_key else 'NO'}, secret_key={'YES' if secret_key else 'NO'}")
-        
-        if not access_key or not secret_key:
-            logger.error("MinIO credentials not found - ensure Vault injection is working")
-            raise RuntimeError("MinIO credentials not available")
-        
-        return access_key, secret_key
+        try:
+            config_file = CONFIG_PATH
+            logger.info(f"Attempting to read credentials from {config_file}")
+            
+            if not os.path.exists(config_file):
+                logger.error(f"Secrets file not found at {config_file}")
+                parent_dir = os.path.dirname(config_file)
+                if os.path.exists(parent_dir):
+                    logger.info(f"Contents of {parent_dir}: {os.listdir(parent_dir)}")
+                else:
+                    logger.error(f"Parent directory {parent_dir} does not exist")
+                raise FileNotFoundError(f"Secrets file not found at {config_file}")
+
+            with open(config_file, 'r') as f:
+                config_content = f.read()
+                logger.debug(f"Successfully read config file (length: {len(config_content)})")
+
+            credentials = {}
+            for line in config_content.split('\n'):
+                if line.startswith('export'):
+                    key, value = line.replace('export ', '').split('=', 1)
+                    value = value.strip().strip('"\'')
+                    credentials[key.strip()] = value
+
+            access_key = credentials.get('MINIO_ROOT_USER')
+            secret_key = credentials.get('MINIO_ROOT_PASSWORD')
+
+            logger.info("Checking for Vault-injected MinIO credentials")
+            logger.info(f"MinIO credentials present: access_key={'YES' if access_key else 'NO'}, secret_key={'YES' if secret_key else 'NO'}")
+
+            if not access_key or not secret_key:
+                logger.error("Failed to extract credentials from config file")
+                raise RuntimeError("MinIO credentials not available in config file")
+
+            return access_key, secret_key
+
+        except Exception as e:
+            logger.error(f"Error retrieving credentials: {str(e)}")
+            raise RuntimeError(f"Failed to get MinIO credentials: {str(e)}")
 
     def initialize_client(self) -> Minio:
         for attempt in range(self.max_retries):
@@ -75,6 +108,8 @@ class ImageDownloader:
     def __init__(self, minio_client: Minio, config: Dict[str, Any]):
         self.minio_client = minio_client
         self.bucket_name = config['raw_bucket']
+        # Store the config as an instance attribute so it can be accessed in methods
+        self.config = config
     
     def ensure_bucket(self) -> None:
         try:
@@ -123,27 +158,80 @@ class ImageDownloader:
         except Exception as e:
             logger.error(f"Error downloading/storing image: {str(e)}")
             raise
+        
+def wait_for_vault_secrets():
+    max_retries = 30
+    retry_count = 0
+    secrets_file = SECRETS_PATH
+    
+    while not os.path.exists(secrets_file):
+        if retry_count >= max_retries:
+            raise RuntimeError("Timed out waiting for Vault secrets")
+        logger.info(f"Waiting for Vault secrets (attempt {retry_count + 1}/{max_retries})...")
+        time.sleep(2)
+        retry_count += 1
+    
+    with open(secrets_file, 'r') as f:
+        for line in f:
+            if line.startswith('export'):
+                key, value = line.replace('export ', '').strip().split('=', 1)
+                os.environ[key.strip()] = value.strip().strip('"\'')
+    
+    logger.info("Vault secrets loaded successfully")
 
-def create_cloud_event_response(event_type: str, data: dict, config: Dict[str, Any]) -> CloudEvent:
+def ensure_vault_secrets(func):
+    """Decorator to ensure Vault secrets are available before function execution."""
+    initialization_complete = threading.Event()
+    
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if not initialization_complete.is_set():
+            try:
+                wait_for_vault_secrets()
+                initialization_complete.set()
+            except Exception as e:
+                logger.error(f"Failed to initialize Vault secrets: {str(e)}")
+                raise
+        return func(*args, **kwargs)
+    return wrapper        
+
+def create_cloud_event_response(
+    event_type: str,
+    data: dict,
+    config: Dict[str, Any],
+    source_override: Optional[str] = None,
+    category_override: Optional[str] = None
+) -> CloudEvent:
+    source = source_override if source_override is not None else config['event_source']
+    category = category_override if category_override is not None else "storage"
+    trace_id = str(uuid.uuid4())
     return CloudEvent({
         "specversion": "1.0",
         "type": event_type,
-        "source": config['event_source'],  
-        "id": f"storage-{int(time.time())}",
+        "source": source,
+        "id": f"{event_type}-{int(time.time())}",
         "time": datetime.now(timezone.utc).isoformat(),
-        "category": "storage",  
-        "datacontenttype": "application/json"
+        "category": category,
+        "datacontenttype": "application/json",
+        "trace_id": trace_id
     }, data)
 
+@ensure_vault_secrets
 def main(context: Context) -> CloudEvent:
-    logger.info(f"Processing event type: {context.cloud_event.type}")
+    logger.info(f"Processing event type: {context.cloud_event['type']}")
     image_url: Optional[str] = None
     
     try:
         config = get_config()
         
-        if context.cloud_event.type != "image.upload.requested":
-            raise ValueError(f"Unexpected event type: {context.cloud_event.type}")
+        try:
+            secrets_contents = os.listdir('/vault/secrets')
+            logger.info(f"Contents of /vault/secrets: {secrets_contents}")
+        except Exception as e:
+            logger.error(f"Error listing /vault/secrets: {str(e)}")
+        
+        if context.cloud_event["type"] != "image.storage.requested":
+            raise ValueError(f"Unexpected event type: {context.cloud_event['type']}")
         
         event_data = context.cloud_event.data
         if isinstance(event_data, str):
@@ -159,16 +247,21 @@ def main(context: Context) -> CloudEvent:
         
         result = downloader.download_and_store_image(image_url)
         
+        #   type: "image.storage.completed"
+        #   source: "image-processing/processor"
+        #   category: "processing"
         return create_cloud_event_response(
             "image.storage.completed",
             result,
-            config
+            config,
+            source_override="image-processing/processor",
+            category_override="processing"
         )
         
     except requests.exceptions.RequestException as e:
         logger.error(f"Network error downloading image: {str(e)}")
         return create_cloud_event_response(
-            "image.error.storage",
+            "image.error",
             {
                 "error": str(e),
                 "error_type": "NetworkError",
@@ -176,12 +269,12 @@ def main(context: Context) -> CloudEvent:
                 "component": "storage",
                 "timestamp": int(time.time())
             },
-            config if 'config' in locals() else get_config()
+            config
         )
     except Exception as e:
         logger.error(f"Error in main handler: {str(e)}", exc_info=True)
         return create_cloud_event_response(
-            "image.error.storage",
+            "image.error",
             {
                 "error": str(e),
                 "error_type": type(e).__name__,
@@ -189,5 +282,5 @@ def main(context: Context) -> CloudEvent:
                 "component": "storage",
                 "timestamp": int(time.time())
             },
-            config if 'config' in locals() else get_config()
-        )    
+            config
+        )

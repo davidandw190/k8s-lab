@@ -1,0 +1,15 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: minio-vault-authw
+  namespace: image-processing
+  labels:
+    app.kubernetes.io/name: vault-auth
+    app.kubernetes.io/part-of: image-processing-system
+rules:
+- apiGroups: [ "" ]
+  resources: [ "secrets", "serviceaccounts/token" ]
+  verbs: [ "get", "list", "watch", "create" ]
+- apiGroups: [ "authentication.k8s.io" ]
+  resources: [ "tokenreviews" ]
+  verbs: [ "create" ]

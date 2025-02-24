@@ -1,0 +1,16 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: minio-vault-auth
+  namespace: image-processing
+  labels:
+    app.kubernetes.io/name: vault-auth
+    app.kubernetes.io/part-of: image-processing-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: vault-auth-role
+subjects:
+- kind: ServiceAccount
+  name: minio-vault-auth
+  namespace: image-processing

@@ -10,6 +10,7 @@ import io
 import time
 import json
 import logging
+import uuid
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,7 +31,8 @@ def get_config() -> Dict[str, Any]:
         'jpeg_quality': int(os.getenv('JPEG_QUALITY', '85')),
         'max_image_size': max_size_tuple,
         'contrast_enhancement': float(os.getenv('CONTRAST_ENHANCEMENT', '1.2')),
-        'event_source': 'image-processing/processor',
+        # This should be set to "image-processing/processor" for processor events.
+        'event_source': os.getenv('EVENT_SOURCE_PROCESSOR', 'image-processing/processor'),
         'secure_connection': os.getenv('MINIO_SECURE', 'false').lower() == 'true'
     }
 
@@ -178,15 +180,25 @@ class ImageProcessor:
             "timestamp": int(time.time())
         }
 
-def create_cloud_event_response(event_type: str, data: dict, config: Dict[str, Any]) -> CloudEvent:
+def create_cloud_event_response(
+    event_type: str,
+    data: dict,
+    config: Dict[str, Any],
+    source_override: str = None,
+    category_override: str = None
+) -> CloudEvent:
+    source = source_override if source_override is not None else config['event_source']
+    category = category_override if category_override is not None else "processing"
+    trace_id = str(uuid.uuid4())
     return CloudEvent({
         "specversion": "1.0",
         "type": event_type,
-        "source": config['event_source'],  
+        "source": source,
         "id": f"processor-{int(time.time())}",
         "time": datetime.now(timezone.utc).isoformat(),
-        "category": "processing",  
-        "datacontenttype": "application/json"
+        "category": category,
+        "datacontenttype": "application/json",
+        "trace_id": trace_id
     }, data)
 
 def main(context: Context) -> CloudEvent:
@@ -227,7 +239,7 @@ def main(context: Context) -> CloudEvent:
                 "component": "processor",
                 "timestamp": int(time.time())
             },
-            config if 'config' in locals() else get_config()
+            config
         )
     except Exception as e:
         logger.error(f"Error in main handler: {str(e)}", exc_info=True)
@@ -240,5 +252,5 @@ def main(context: Context) -> CloudEvent:
                 "component": "processor",
                 "timestamp": int(time.time())
             },
-            config if 'config' in locals() else get_config()
+            config
         )

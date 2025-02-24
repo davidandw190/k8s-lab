@@ -1,17 +1,18 @@
 apiVersion: eventing.knative.dev/v1
 kind: Trigger
 metadata:
-  name: downloader-trigger
+  name: storage-trigger
   namespace: image-processing
   labels:
-    app.kubernetes.io/name: downloader-trigger
+    app.kubernetes.io/name: storage-trigger
     app.kubernetes.io/part-of: image-processing-system
 spec:
   broker: image-processing-broker
   filter:
     attributes:
-      type: image.upload.requested
+      type: image.storage.requested
       category: storage
+      source: "image-processing/storage"
   subscriber:
     ref:
       apiVersion: serving.knative.dev/v1
@@ -21,10 +22,10 @@ spec:
 apiVersion: eventing.knative.dev/v1
 kind: Trigger
 metadata:
-  name: processor-trigger
+  name: processing-trigger
   namespace: image-processing
   labels:
-    app.kubernetes.io/name: processor-trigger
+    app.kubernetes.io/name: processing-trigger
     app.kubernetes.io/part-of: image-processing-system
 spec:
   broker: image-processing-broker
@@ -32,6 +33,7 @@ spec:
     attributes:
       type: image.storage.completed
       category: processing
+      source: "image-processing/processor"
   subscriber:
     ref:
       apiVersion: serving.knative.dev/v1
@@ -50,7 +52,7 @@ spec:
   broker: image-processing-broker
   filter:
     attributes:
-      type: image.error.storage, image.error.processing, image.error.validation
+      type: image.error
   subscriber:
     ref:
       apiVersion: serving.knative.dev/v1

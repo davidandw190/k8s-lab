@@ -5,56 +5,26 @@ registry: docker.io/davidandw190
 image: docker.io/davidandw190/downloader:latest
 namespace: image-processing
 created: 2025-02-06T00:33:20.274209301+02:00
-
 build:
   builder: pack
   buildEnvs:
   - name: PYTHONUNBUFFERED
     value: "1"
-
-run:
-  command: [ "/bin/sh", "-c" ]
-  args:
-  - |
-    echo "Waiting for Vault secrets..."
-    while [ ! -f /vault/secrets/minio-config ]; do
-      sleep 2
-      echo "Waiting for secrets..."
-    done
-    source /vault/secrets/minio-config
-    exec functions-framework --target main
-
 deploy:
   namespace: image-processing
-  template:
-    metadata:
-      annotations:
-        vault.hashicorp.com/agent-inject: "true"
-        vault.hashicorp.com/role: "minio-role"
-        vault.hashicorp.com/agent-pre-populate-only: "true"
-        vault.hashicorp.com/agent-inject-secret-minio-config: "minio/data/data/config"
-        vault.hashicorp.com/agent-inject-template-minio-config: |
-          {{- with secret "minio/data/data/config" -}}
-          export MINIO_ROOT_USER="{{ .Data.data.MINIO_ROOT_USER }}"
-          export MINIO_ROOT_PASSWORD="{{ .Data.data.MINIO_ROOT_PASSWORD }}"
-          {{- end -}}
-        vault.hashicorp.com/log-level: "info"
-        autoscaling.knative.dev/target: "1"
-    spec:
-      containerConcurrency: 0
-      containers:
-      - name: user-container
-        resources:
-          requests:
-            memory: "256Mi"
-            cpu: "250m"
-          limits:
-            memory: "512Mi"
-            cpu: "500m"
-        securityContext:
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop: [ "ALL" ]
-          runAsNonRoot: true
-          seccompProfile:
-            type: RuntimeDefault
+  image: docker.io/davidandw190/downloader@sha256:fdb6f6e3f368e6d2044658f142582f9d868e8f666231227d750eb6b2fdb8bd72
+  annotations:
+    serving.knative.dev/serviceAccountName: minio-vault-auth
+    vault.hashicorp.com/agent-init-first: "true"
+    vault.hashicorp.com/agent-inject: "true"
+    vault.hashicorp.com/agent-inject-secret-minio-config: minio/data/data/config
+    vault.hashicorp.com/agent-inject-status: update
+    vault.hashicorp.com/agent-inject-template-minio-config: |
+      {{- with secret "minio/data/data/config" -}}
+      export MINIO_ROOT_USER="{{ .Data.data.MINIO_ROOT_USER }}"
+      export MINIO_ROOT_PASSWORD="{{ .Data.data.MINIO_ROOT_PASSWORD }}"
+      {{- end -}}
+    vault.hashicorp.com/agent-inject-token: "true"
+    vault.hashicorp.com/agent-pre-populate-only: "true"
+    vault.hashicorp.com/role: minio-role
+  serviceAccountName: minio-vault-auth
