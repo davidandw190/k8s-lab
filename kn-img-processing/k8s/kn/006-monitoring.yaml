@@ -1,0 +1,23 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: event-monitor
+  namespace: image-processing
+spec:
+  template:
+    spec:
+      containers:
+      - image: gcr.io/knative-releases/knative.dev/eventing-contrib/cmd/event_display
+---
+apiVersion: eventing.knative.dev/v1
+kind: Trigger
+metadata:
+  name: monitor-all
+  namespace: image-processing
+spec:
+  broker: image-processing-broker
+  subscriber:
+    ref:
+      apiVersion: serving.knative.dev/v1
+      kind: Service
+      name: event-monitor
