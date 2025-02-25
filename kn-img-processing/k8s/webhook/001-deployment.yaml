@@ -23,18 +23,18 @@ spec:
         - containerPort: 8080
         env:
         - name: PORT
-          value: "8080"
+          value: '8080'
         - name: SOURCE_ID
-          value: "image-processing/webhook"
+          value: 'image-processing/webhook'
         - name: EVENT_TYPE
-          value: "image.storage.requested"
+          value: 'image.storage.requested'
         resources:
           limits:
-            memory: "512Mi"
-            cpu: "500m"
+            memory: '512Mi'
+            cpu: '500m'
           requests:
-            memory: "256Mi"
-            cpu: "250m"
+            memory: '256Mi'
+            cpu: '250m'
         livenessProbe:
           httpGet:
             path: /health
@@ -47,19 +47,3 @@ spec:
             port: 8080
           initialDelaySeconds: 5
           periodSeconds: 10
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: image-webhook
-  namespace: image-processing
-  labels:
-    app: image-webhook
-    app.kubernetes.io/part-of: image-processing-system
-spec:
-  selector:
-    app: image-webhook
-  ports:
-  - port: 80
-    targetPort: 8080
-  type: ClusterIP
