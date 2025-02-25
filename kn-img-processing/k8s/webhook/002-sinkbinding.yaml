@@ -1,0 +1,15 @@
+apiVersion: sources.knative.dev/v1
+kind: SinkBinding
+metadata:
+  name: image-webhook-sink
+  namespace: image-processing
+spec:
+  subject:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: image-webhook
+  sink:
+    ref:
+      apiVersion: eventing.knative.dev/v1
+      kind: Broker
+      name: image-processing-broker
