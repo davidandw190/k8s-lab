@@ -108,7 +108,6 @@ class ImageDownloader:
     def __init__(self, minio_client: Minio, config: Dict[str, Any]):
         self.minio_client = minio_client
         self.bucket_name = config['raw_bucket']
-        # Store the config as an instance attribute so it can be accessed in methods
         self.config = config
     
     def ensure_bucket(self) -> None:
@@ -180,7 +179,6 @@ def wait_for_vault_secrets():
     logger.info("Vault secrets loaded successfully")
 
 def ensure_vault_secrets(func):
-    """Decorator to ensure Vault secrets are available before function execution."""
     initialization_complete = threading.Event()
     
     @wraps(func)
@@ -205,6 +203,9 @@ def create_cloud_event_response(
     source = source_override if source_override is not None else config['event_source']
     category = category_override if category_override is not None else "storage"
     trace_id = str(uuid.uuid4())
+    
+    logger.info(f"Creating CloudEvent response: type={event_type}, source={source}, category={category}")
+    
     return CloudEvent({
         "specversion": "1.0",
         "type": event_type,
@@ -244,43 +245,60 @@ def main(context: Context) -> CloudEvent:
         minio_manager = MinioClientManager(config)
         minio_client = minio_manager.initialize_client()
         downloader = ImageDownloader(minio_client, config)
-        
         result = downloader.download_and_store_image(image_url)
         
-        #   type: "image.storage.completed"
-        #   source: "image-processing/processor"
-        #   category: "processing"
-        return create_cloud_event_response(
-            "image.storage.completed",
-            result,
-            config,
-            source_override="image-processing/processor",
-            category_override="processing"
-        )
+        event_id = f"image.storage.completed-{int(time.time())}"
+        event_time = datetime.now(timezone.utc).isoformat()
+        
+        response_event = CloudEvent({
+            "specversion": "1.0",
+            "id": event_id,
+            "type": "image.storage.completed",
+            "source": "image-processing/storage",
+            "time": event_time,
+            "datacontenttype": "application/json",
+            "category": "processing"
+        }, result)
+        
+        logger.info(f"Returning CloudEvent with id={event_id}, type=image.storage.completed")
+        logger.info(f"CloudEvent data: {json.dumps(result)}")
+        
+        return response_event
         
     except requests.exceptions.RequestException as e:
         logger.error(f"Network error downloading image: {str(e)}")
-        return create_cloud_event_response(
-            "image.error",
-            {
-                "error": str(e),
-                "error_type": "NetworkError",
-                "original_url": image_url,
-                "component": "storage",
-                "timestamp": int(time.time())
-            },
-            config
-        )
+        error_data = {
+            "error": str(e),
+            "error_type": "NetworkError",
+            "original_url": image_url,
+            "component": "storage",
+            "timestamp": int(time.time())
+        }
+        return CloudEvent({
+            "specversion": "1.0",
+            "id": f"image.error-{int(time.time())}",
+            "type": "image.error",
+            "source": "image-processing/storage",
+            "time": datetime.now(timezone.utc).isoformat(),
+            "datacontenttype": "application/json",
+            "category": "storage"
+        }, error_data)
+        
     except Exception as e:
         logger.error(f"Error in main handler: {str(e)}", exc_info=True)
-        return create_cloud_event_response(
-            "image.error",
-            {
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "original_url": image_url,
-                "component": "storage",
-                "timestamp": int(time.time())
-            },
-            config
-        )
+        error_data = {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "original_url": image_url,
+            "component": "storage",
+            "timestamp": int(time.time())
+        }
+        return CloudEvent({
+            "specversion": "1.0",
+            "id": f"image.error-{int(time.time())}",
+            "type": "image.error",
+            "source": "image-processing/storage",
+            "time": datetime.now(timezone.utc).isoformat(),
+            "datacontenttype": "application/json",
+            "category": "storage"
+        }, error_data)

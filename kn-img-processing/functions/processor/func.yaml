@@ -12,4 +12,20 @@ build:
     value: "1"
 deploy:
   namespace: image-processing
-  image: docker.io/davidandw190/processor@sha256:1353ae4a89a250460949bed84f62f65a46003707d3880a92eb5aef73be1ffce4
+  image: docker.io/davidandw190/processor@sha256:1111aed23b76515cdd5b8c6ee5ffa098dcb6108c841b649f419e5b65e41684b2
+  annotations:
+    serving.knative.dev/preserveCloudEvents: "true"
+    serving.knative.dev/serviceAccountName: minio-vault-auth
+    vault.hashicorp.com/agent-init-first: "true"
+    vault.hashicorp.com/agent-inject: "true"
+    vault.hashicorp.com/agent-inject-secret-minio-config: minio/data/data/config
+    vault.hashicorp.com/agent-inject-status: update
+    vault.hashicorp.com/agent-inject-template-minio-config: |
+      {{- with secret "minio/data/data/config" -}}
+      export MINIO_ROOT_USER="{{ .Data.data.MINIO_ROOT_USER }}"
+      export MINIO_ROOT_PASSWORD="{{ .Data.data.MINIO_ROOT_PASSWORD }}"
+      {{- end -}}
+    vault.hashicorp.com/agent-inject-token: "true"
+    vault.hashicorp.com/agent-pre-populate-only: "true"
+    vault.hashicorp.com/role: minio-role
+  serviceAccountName: minio-vault-auth

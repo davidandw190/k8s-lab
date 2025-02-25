@@ -12,8 +12,9 @@ build:
     value: "1"
 deploy:
   namespace: image-processing
-  image: docker.io/davidandw190/downloader@sha256:fdb6f6e3f368e6d2044658f142582f9d868e8f666231227d750eb6b2fdb8bd72
+  image: docker.io/davidandw190/downloader@sha256:cf82251be8e0e894c08c435458b888d84d27098aa53cf2e14954a3cc93d6a8df
   annotations:
+    serving.knative.dev/preserveCloudEvents: "true"
     serving.knative.dev/serviceAccountName: minio-vault-auth
     vault.hashicorp.com/agent-init-first: "true"
     vault.hashicorp.com/agent-inject: "true"
