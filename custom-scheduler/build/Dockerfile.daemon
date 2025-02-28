@@ -1,0 +1,19 @@
+FROM golang:1.23 as builder
+WORKDIR /workspace
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-s -w" -o node-daemon ./cmd/node-daemon
+
+FROM alpine:3.19
+RUN addgroup -S daemon && adduser -S daemon -G daemon
+WORKDIR /app
+COPY --from=builder /workspace/node-daemon .
+RUN apk add --no-cache bash procps util-linux coreutils && \
+    chmod +x /app/node-daemon
+RUN mkdir -p /app/data && \
+    chown -R daemon:daemon /app
+USER daemon:daemon
+EXPOSE 8080
+ENTRYPOINT ["/app/node-daemon"]

@@ -1,0 +1,19 @@
+FROM golang:1.23 as builder
+WORKDIR /workspace
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-s -w" -o custom-scheduler ./cmd/scheduler
+
+FROM alpine:3.19
+RUN addgroup -S scheduler && adduser -S scheduler -G scheduler
+WORKDIR /app
+COPY --from=builder /workspace/custom-scheduler .
+RUN apk add --no-cache bash procps curl && \
+    chmod +x /app/custom-scheduler
+RUN mkdir -p /app/config && \
+    chown -R scheduler:scheduler /app
+USER scheduler:scheduler
+EXPOSE 8080
+ENTRYPOINT ["/app/custom-scheduler"]
