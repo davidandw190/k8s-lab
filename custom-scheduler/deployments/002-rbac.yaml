@@ -1,0 +1,85 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: custom-scheduler
+  namespace: custom-scheduler
+  annotations:
+    description: "Service account for the custom Kubernetes scheduler"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: thesis-scheduler-role
+  annotations:
+    description: "Role providing necessary permissions for the custom scheduler to access and manipulate Kubernetes resources"
+rules:
+- apiGroups: [ "" ]
+  resources: [ "endpoints" ]
+  verbs: [ "get", "create", "update" ]
+- apiGroups: [ "" ]
+  resources: [ "nodes" ]
+  verbs: [ "get", "list", "watch" ]
+- apiGroups: [ "" ]
+  resources: [ "pods" ]
+  verbs: [ "get", "list", "watch", "update", "patch" ]
+- apiGroups: [ "" ]
+  resources: [ "bindings", "pods/binding" ]
+  verbs: [ "create" ]
+- apiGroups: [ "" ]
+  resources: [ "pods/status" ]
+  verbs: [ "update", "patch" ]
+- apiGroups: [ "" ]
+  resources: [ "events" ]
+  verbs: [ "create", "patch", "update" ]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: thesis-scheduler-binding
+  annotations:
+    description: "Binding that grants the custom scheduler service account the permissions defined in its role"
+subjects:
+- kind: ServiceAccount
+  name: custom-scheduler
+  namespace: custom-scheduler
+roleRef:
+  kind: ClusterRole
+  name: thesis-scheduler-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: node-daemon
+  namespace: custom-scheduler
+  annotations:
+    description: "Service account for the node capability daemon that collects and reports node hardware capabilities"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: thesis-node-daemon-role
+  annotations:
+    description: "Role providing necessary permissions for the node daemon to examine node capabilities and update node labels"
+rules:
+- apiGroups: [ "" ]
+  resources: [ "nodes" ]
+  verbs: [ "get", "list", "watch", "update", "patch" ]
+- apiGroups: [ "" ]
+  resources: [ "events" ]
+  verbs: [ "create", "patch" ]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: thesis-node-daemon-binding
+  annotations:
+    description: "Binding that grants the node daemon service account the permissions defined in its role"
+subjects:
+- kind: ServiceAccount
+  name: node-daemon
+  namespace: custom-scheduler
+roleRef:
+  kind: ClusterRole
+  name: thesis-node-daemon-role
+  apiGroup: rbac.authorization.k8s.io

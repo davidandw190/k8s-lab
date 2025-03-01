@@ -2,7 +2,11 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: custom-scheduler
-  namespace: kube-system
+  namespace: custom-scheduler
+  labels:
+    app: custom-scheduler
+  annotations:
+    description: "Deployment for the custom Kubernetes scheduler with data locality awareness capabilities"
 spec:
   replicas: 1
   selector:
@@ -55,7 +59,9 @@ apiVersion: v1
 kind: Service
 metadata:
   name: custom-scheduler-health
-  namespace: kube-system
+  namespace: custom-scheduler
+  annotations:
+    description: "Service exposing health check endpoint for the custom scheduler"
 spec:
   selector:
     app: custom-scheduler

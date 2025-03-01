@@ -2,7 +2,11 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: node-capability-daemon
-  namespace: kube-system
+  namespace: custom-scheduler
+  labels:
+    app: node-capability-daemon
+  annotations:
+    description: "DaemonSet that runs the node capability collection daemon on every cluster node"
 spec:
   selector:
     matchLabels:

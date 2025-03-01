@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: custom-scheduler
+  labels:
+    name: custom-scheduler
+  annotations:
+    description: "Dedicated namespace for custom Kubernetes scheduler extension components"
