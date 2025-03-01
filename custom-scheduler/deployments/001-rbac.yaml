@@ -1,40 +1,43 @@
-# Service account for the custom scheduler
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: custom-scheduler
   namespace: kube-system
+  annotations:
+    description: 'Service account for the custom Kubernetes scheduler'
 ---
-# Role for the custom scheduler
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: custom-scheduler-role
+  annotations:
+    description: 'Role providing necessary permissions for the custom scheduler to access and manipulate Kubernetes resources'
 rules:
-- apiGroups: [ "" ]
-  resources: [ "endpoints" ]
-  verbs: [ "get", "create", "update" ]
-- apiGroups: [ "" ]
-  resources: [ "nodes" ]
-  verbs: [ "get", "list", "watch" ]
-- apiGroups: [ "" ]
-  resources: [ "pods" ]
-  verbs: [ "get", "list", "watch", "update", "patch" ]
-- apiGroups: [ "" ]
-  resources: [ "bindings", "pods/binding" ]
-  verbs: [ "create" ]
-- apiGroups: [ "" ]
-  resources: [ "pods/status" ]
-  verbs: [ "update", "patch" ]
-- apiGroups: [ "" ]
-  resources: [ "events" ]
-  verbs: [ "create", "patch", "update" ]
+- apiGroups: [ '' ]
+  resources: [ 'endpoints' ]
+  verbs: [ 'get', 'create', 'update' ]
+- apiGroups: [ '' ]
+  resources: [ 'nodes' ]
+  verbs: [ 'get', 'list', 'watch' ]
+- apiGroups: [ '' ]
+  resources: [ 'pods' ]
+  verbs: [ 'get', 'list', 'watch', 'update', 'patch' ]
+- apiGroups: [ '' ]
+  resources: [ 'bindings', 'pods/binding' ]
+  verbs: [ 'create' ]
+- apiGroups: [ '' ]
+  resources: [ 'pods/status' ]
+  verbs: [ 'update', 'patch' ]
+- apiGroups: [ '' ]
+  resources: [ 'events' ]
+  verbs: [ 'create', 'patch', 'update' ]
 ---
-# Role binding for the custom scheduler
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: custom-scheduler-binding
+  annotations:
+    description: 'Binding that grants the custom scheduler service account the permissions defined in its role'
 subjects:
 - kind: ServiceAccount
   name: custom-scheduler
@@ -44,31 +47,34 @@ roleRef:
   name: custom-scheduler-role
   apiGroup: rbac.authorization.k8s.io
 ---
-# Service account for the node daemon
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: node-daemon
   namespace: kube-system
+  annotations:
+    description: 'Service account for the node capability daemon that collects and reports node hardware capabilities'
 ---
-# Role for the node daemon
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: node-daemon-role
+  annotations:
+    description: 'Role providing necessary permissions for the node daemon to examine node capabilities and update node labels'
 rules:
-- apiGroups: [ "" ]
-  resources: [ "nodes" ]
-  verbs: [ "get", "list", "watch", "update", "patch" ]
-- apiGroups: [ "" ]
-  resources: [ "events" ]
-  verbs: [ "create", "patch" ]
+- apiGroups: [ '' ]
+  resources: [ 'nodes' ]
+  verbs: [ 'get', 'list', 'watch', 'update', 'patch' ]
+- apiGroups: [ '' ]
+  resources: [ 'events' ]
+  verbs: [ 'create', 'patch' ]
 ---
-# Role binding for the node daemon
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: node-daemon-binding
+  annotations:
+    description: 'Binding that grants the node daemon service account the permissions defined in its role'
 subjects:
 - kind: ServiceAccount
   name: node-daemon
