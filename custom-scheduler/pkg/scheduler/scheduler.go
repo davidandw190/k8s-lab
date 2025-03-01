@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
 	"time"
@@ -53,6 +54,16 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	if !cache.WaitForCacheSync(ctx.Done(), podInformer.HasSynced) {
 		return fmt.Errorf("timed out waiting for pod informer caches to sync")
 	}
+
+	go func() {
+		http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("OK"))
+		})
+		if err := http.ListenAndServe(":8080", nil); err != nil {
+			klog.Errorf("Health check server failed: %v", err)
+		}
+	}()
 
 	// Start the scheduling loop
 	go wait.UntilWithContext(ctx, s.scheduleOne, schedulerInterval)
