@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-capability-daemon
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: node-capability-daemon
+  template:
+    metadata:
+      labels:
+        app: node-capability-daemon
+    spec:
+      serviceAccountName: node-daemon
+      containers:
+      - name: node-capability-daemon
+        image: node-daemon:latest
+        imagePullPolicy: Never
+        args:
+        - "--collection-interval=30"
+        - "--v=3"
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        resources:
+          requests:
+            cpu: 50m
+            memory: 50Mi
+          limits:
+            cpu: 100m
+            memory: 100Mi
+        securityContext:
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL

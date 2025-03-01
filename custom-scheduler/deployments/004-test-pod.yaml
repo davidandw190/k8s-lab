@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pod
+  annotations:
+    scheduler.thesis/required-capability: "compute"
+    scheduler.thesis/memory-intensive: "true"
+spec:
+  schedulerName: custom-scheduler
+  containers:
+  - name: nginx
+    image: nginx:latest
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "100m"
+      limits:
+        memory: "128Mi"
+        cpu: "200m"
+  restartPolicy: Never
