@@ -7,13 +7,13 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -ldflags="-s -w" -o custom-scheduler ./cmd/scheduler
 
 FROM alpine:3.19
-RUN addgroup -S scheduler && adduser -S scheduler -G scheduler
+RUN addgroup -S kscheduler && adduser -S kscheduler -G kscheduler
 WORKDIR /app
 COPY --from=builder /workspace/custom-scheduler .
 RUN apk add --no-cache bash procps curl && \
     chmod +x /app/custom-scheduler
 RUN mkdir -p /app/config && \
-    chown -R scheduler:scheduler /app
-USER scheduler:scheduler
+    chown -R kscheduler:kscheduler /app
+USER kscheduler:kscheduler
 EXPOSE 8080
 ENTRYPOINT ["/app/custom-scheduler"]

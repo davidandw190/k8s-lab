@@ -7,13 +7,13 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -ldflags="-s -w" -o node-daemon ./cmd/node-daemon
 
 FROM alpine:3.19
-RUN addgroup -S daemon && adduser -S daemon -G daemon
+RUN addgroup -S nodedaemon && adduser -S nodedaemon -G nodedaemon
 WORKDIR /app
 COPY --from=builder /workspace/node-daemon .
 RUN apk add --no-cache bash procps util-linux coreutils && \
     chmod +x /app/node-daemon
 RUN mkdir -p /app/data && \
-    chown -R daemon:daemon /app
-USER daemon:daemon
+    chown -R nodedaemon:nodedaemon /app
+USER nodedaemon:nodedaemon
 EXPOSE 8080
 ENTRYPOINT ["/app/node-daemon"]
