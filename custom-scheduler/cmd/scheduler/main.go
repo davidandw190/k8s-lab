@@ -15,6 +15,8 @@ import (
 )
 
 func main() {
+	klog.InitFlags(nil)
+
 	var kubeconfig string
 	var master string
 	var schedulerName string
@@ -22,6 +24,7 @@ func main() {
 	flag.StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file")
 	flag.StringVar(&master, "master", "", "The address of the Kubernetes API server")
 	flag.StringVar(&schedulerName, "scheduler-name", "custom-scheduler", "Name of the scheduler")
+
 	flag.Parse()
 
 	ctx, cancel := context.WithCancel(context.Background())

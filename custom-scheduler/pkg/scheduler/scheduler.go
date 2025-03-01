@@ -60,8 +60,10 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("OK"))
 		})
+
+		klog.Info("Starting health check server on :8080")
 		if err := http.ListenAndServe(":8080", nil); err != nil {
-			klog.Errorf("Health check server failed: %v", err)
+			klog.Errorf("Failed to start health check server: %v", err)
 		}
 	}()
 

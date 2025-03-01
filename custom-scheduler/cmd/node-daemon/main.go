@@ -16,6 +16,8 @@ import (
 )
 
 func main() {
+	klog.InitFlags(nil)
+
 	var kubeconfig string
 	var nodeName string
 	var collectionInterval int
@@ -23,6 +25,7 @@ func main() {
 	flag.StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file")
 	flag.StringVar(&nodeName, "node-name", "", "Name of the node this daemon is running on")
 	flag.IntVar(&collectionInterval, "collection-interval", 30, "Interval between capability collections in seconds")
+
 	flag.Parse()
 
 	if nodeName == "" {
@@ -52,10 +55,8 @@ func main() {
 		klog.Fatalf("Failed to create Kubernetes client: %v", err)
 	}
 
-	// Capability collector
 	collector := daemon.NewNodeCapabilityCollector(nodeName, clientset)
 
-	// Graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
