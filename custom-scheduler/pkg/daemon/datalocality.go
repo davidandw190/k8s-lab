@@ -46,51 +46,29 @@ func NewDataLocalityCollector(nodeName string, clientset kubernetes.Interface) *
 func (c *DataLocalityCollector) CollectStorageCapabilities(ctx context.Context) (map[string]string, error) {
 	labels := make(map[string]string)
 
-	fieldSelector := fmt.Sprintf("spec.nodeName=%s", c.nodeName)
-	pods, err := c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
-		FieldSelector: fieldSelector,
-		LabelSelector: StorageServiceLabelSelector,
-	})
-
+	pvs, err := c.clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list storage service pods: %w", err)
+		return nil, fmt.Errorf("failed to list PVs: %w", err)
 	}
 
-	if len(pods.Items) == 0 {
-		return labels, nil
-	}
-
-	minioPods, err := c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
-		FieldSelector: fieldSelector,
-		LabelSelector: MinIOSelector,
-	})
-
-	if err != nil {
-		klog.Warningf("Failed to list MinIO pods: %v", err)
-	}
-
-	if len(minioPods.Items) > 0 {
-		labels[StorageNodeLabel] = "true"
-		labels[StorageTypeLabel] = "minio"
-
-		buckets, err := c.collectMinioBuckets(ctx, minioPods.Items[0])
-		if err == nil && len(buckets) > 0 {
-			for i, bucket := range buckets {
-				if i < 10 {
-					labels[fmt.Sprintf("node-capability/storage-bucket-%s", bucket)] = "true"
+	for _, pv := range pvs.Items {
+		if pv.Spec.NodeAffinity != nil && pv.Spec.NodeAffinity.Required != nil {
+			for _, term := range pv.Spec.NodeAffinity.Required.NodeSelectorTerms {
+				for _, expr := range term.MatchExpressions {
+					if expr.Key == "kubernetes.io/hostname" && expr.Operator == "In" {
+						for _, value := range expr.Values {
+							if value == c.nodeName {
+								labels[StorageNodeLabel] = "true"
+								if pv.Spec.StorageClassName != "" {
+									labels[fmt.Sprintf("node-capability/storage-class-%s", pv.Spec.StorageClassName)] = "true"
+								}
+							}
+						}
+					}
 				}
 			}
 		}
 	}
-
-	for _, pod := range pods.Items {
-		if storageType, ok := pod.Labels["storage-type"]; ok {
-			labels[StorageNodeLabel] = "true"
-			labels[fmt.Sprintf("node-capability/storage-type-%s", storageType)] = "true"
-		}
-	}
-
-	c.collectNetworkMeasurements(ctx, labels)
 
 	return labels, nil
 }
