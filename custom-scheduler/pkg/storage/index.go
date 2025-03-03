@@ -43,6 +43,30 @@ func (si *StorageIndex) AddDataItem(item *DataItem) {
 	si.dataItems[item.URN] = item
 }
 
+// GetAllStorageNodes returns all storage nodes
+func (si *StorageIndex) GetAllStorageNodes() []*StorageNode {
+	si.mu.RLock()
+	defer si.mu.RUnlock()
+
+	nodes := make([]*StorageNode, 0, len(si.storageNodes))
+	for _, node := range si.storageNodes {
+		nodes = append(nodes, node)
+	}
+	return nodes
+}
+
+// GetAllBuckets returns all bucket names
+func (si *StorageIndex) GetAllBuckets() []string {
+	si.mu.RLock()
+	defer si.mu.RUnlock()
+
+	buckets := make([]string, 0, len(si.bucketNodes))
+	for bucket := range si.bucketNodes {
+		buckets = append(buckets, bucket)
+	}
+	return buckets
+}
+
 // GetDataItem retrieves a data item by URN
 func (si *StorageIndex) GetDataItem(urn string) (*DataItem, bool) {
 	si.mu.RLock()
@@ -70,7 +94,6 @@ func (si *StorageIndex) GetStorageNodesForData(urn string) []string {
 	}
 
 	bucket := parts[0]
-
 	nodes := si.bucketNodes[bucket]
 
 	if item, exists := si.dataItems[urn]; exists {
