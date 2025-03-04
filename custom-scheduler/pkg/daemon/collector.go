@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -755,27 +754,27 @@ func (c *NodeCapabilityCollector) executeCommandWithSudo(command string, args ..
 }
 
 // Sanitize the label value to ensure it's valid for Kubernetes
-func sanitizeValue(value string) string {
-	re := regexp.MustCompile(`[^a-zA-Z0-9._-]`)
-	sanitized := re.ReplaceAllString(value, "-")
+// func sanitizeValue(value string) string {
+// 	re := regexp.MustCompile(`[^a-zA-Z0-9._-]`)
+// 	sanitized := re.ReplaceAllString(value, "-")
 
-	if len(sanitized) > 63 {
-		sanitized = sanitized[:63]
-	}
+// 	if len(sanitized) > 63 {
+// 		sanitized = sanitized[:63]
+// 	}
 
-	if len(sanitized) > 0 {
-		if !isAlphaNumeric(sanitized[0]) {
-			sanitized = "x" + sanitized[1:]
-		}
-		if !isAlphaNumeric(sanitized[len(sanitized)-1]) {
-			sanitized = sanitized[:len(sanitized)-1] + "x"
-		}
-	} else {
-		sanitized = "unknown"
-	}
+// 	if len(sanitized) > 0 {
+// 		if !isAlphaNumeric(sanitized[0]) {
+// 			sanitized = "x" + sanitized[1:]
+// 		}
+// 		if !isAlphaNumeric(sanitized[len(sanitized)-1]) {
+// 			sanitized = sanitized[:len(sanitized)-1] + "x"
+// 		}
+// 	} else {
+// 		sanitized = "unknown"
+// 	}
 
-	return sanitized
-}
+// 	return sanitized
+// }
 
 // Check if a character is alphanumeric
 func isAlphaNumeric(c byte) bool {
