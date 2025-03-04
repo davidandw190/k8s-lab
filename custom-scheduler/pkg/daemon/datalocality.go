@@ -2,16 +2,13 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"maps"
 	"slices"
 
 	v1 "k8s.io/api/core/v1"
@@ -21,43 +18,40 @@ import (
 )
 
 const (
-	// Storage service
-	StorageServiceLabelSelector = "app=storage-service"
-	MinIOSelector               = "app=minio"
-	StorageNodeLabel            = "node-capability/storage-service"
-	StorageTypeLabel            = "node-capability/storage-type"
+	// Storage service labels
+	StorageNodeLabel     = "node-capability/storage-service"
+	StorageTypeLabel     = "node-capability/storage-type"
+	StorageTechLabel     = "node-capability/storage-technology"
+	StorageCapacityLabel = "node-capability/storage-capacity-bytes"
+	BucketLabelPrefix    = "node-capability/storage-bucket-"
 
-	// Bandwidth
+	// Network labels
 	BandwidthPrefix = "node-capability/bandwidth-to-"
-	BandwidthPeriod = 24 * time.Hour
+	LatencyPrefix   = "node-capability/latency-to-"
 
-	// Edge-cloud
+	// Bandwidth measurement interval
+	BandwidthMeasurementInterval = 6 * time.Hour
+
+	// Edge-cloud labels
 	EdgeNodeLabel  = "node-capability/node-type"
 	EdgeNodeValue  = "edge"
 	CloudNodeValue = "cloud"
 
-	// Topology
+	// Topology labels
 	RegionLabel = "topology.kubernetes.io/region"
 	ZoneLabel   = "topology.kubernetes.io/zone"
 )
 
-// StorageInfo represents storage capabilities and status
-type StorageInfo struct {
-	Provider  string   `json:"provider"`
-	Buckets   []string `json:"buckets,omitempty"`
-	Capacity  int64    `json:"capacity"`
-	Available int64    `json:"available"`
-	Endpoints []string `json:"endpoints,omitempty"`
-}
-
-// DataLocalityCollector collects information about data locality
+// DataLocalityCollector collects information about storage and networking
 type DataLocalityCollector struct {
 	nodeName              string
 	clientset             kubernetes.Interface
 	bandwidthCache        map[string]int64
 	bandwidthLatencyCache map[string]float64
-	bandwidthCacheLock    sync.RWMutex
-	lastUpdate            time.Time
+	bandwidthCacheMutex   sync.RWMutex
+	lastBandwidthUpdate   time.Time
+	storageCache          map[string]interface{}
+	storageCacheMutex     sync.RWMutex
 	nodeType              string // "edge" or "cloud"
 	region                string
 	zone                  string
@@ -70,12 +64,12 @@ func NewDataLocalityCollector(nodeName string, clientset kubernetes.Interface) *
 		clientset:             clientset,
 		bandwidthCache:        make(map[string]int64),
 		bandwidthLatencyCache: make(map[string]float64),
-		lastUpdate:            time.Now().Add(-BandwidthPeriod), // to force immediate update
-		nodeType:              CloudNodeValue,                   // default to cloud
+		storageCache:          make(map[string]interface{}),
+		lastBandwidthUpdate:   time.Now().Add(-BandwidthMeasurementInterval), // Force immediate update
 	}
 }
 
-// CollectStorageCapabilities collects storage service information on the node
+// CollectStorageCapabilities detects storage services and capabilities
 func (c *DataLocalityCollector) CollectStorageCapabilities(ctx context.Context) (map[string]string, error) {
 	labels := make(map[string]string)
 
@@ -84,228 +78,190 @@ func (c *DataLocalityCollector) CollectStorageCapabilities(ctx context.Context) 
 		return nil, fmt.Errorf("failed to get node %s: %w", c.nodeName, err)
 	}
 
-	c.detectAndSetNodeType(node, labels)
-	c.detectAndSetTopology(node, labels)
+	c.detectAndSetNodeTopology(node, labels)
 
-	hasMinio, minioBuckets, minioCap, err := c.detectMinIOService(ctx)
+	hasMinio, minioBuckets, storageCapacity, err := c.detectStorageService(ctx)
 	if err != nil {
-		klog.Warningf("Error detecting MinIO service: %v", err)
+		klog.Warningf("Error detecting storage service: %v", err)
 	}
 
 	if hasMinio {
 		labels[StorageNodeLabel] = "true"
-		labels[StorageTypeLabel] = "minio"
+		labels[StorageTypeLabel] = "object"
 
-		if minioCap > 0 {
-			labels["node-capability/storage-capacity"] = strconv.FormatInt(minioCap, 10)
+		if storageCapacity > 0 {
+			labels[StorageCapacityLabel] = strconv.FormatInt(storageCapacity, 10)
 		}
 
+		// register buckets
 		for _, bucket := range minioBuckets {
-			labels[fmt.Sprintf("node-capability/storage-bucket-%s", bucket)] = "true"
+			labels[BucketLabelPrefix+bucket] = "true"
 		}
-	}
 
-	hasStorage, storageLabels := c.detectNodeStorage(ctx)
-	if hasStorage {
-		for k, v := range storageLabels {
-			labels[k] = v
+		// detect storage technology (SSD, HDD, etc.)
+		storageTech, err := c.detectStorageTechnology()
+		if err == nil && storageTech != "" {
+			labels[StorageTechLabel] = storageTech
 		}
-	}
-
-	if !hasMinio && !hasStorage {
-		for key := range node.Labels {
-			if strings.HasPrefix(key, StorageNodeLabel) ||
-				strings.HasPrefix(key, StorageTypeLabel) ||
-				strings.HasPrefix(key, "node-capability/storage-bucket-") {
-				labels[key] = "" // mark for deletion
-			}
-		}
-	}
-
-	if time.Since(c.lastUpdate) > BandwidthPeriod {
-		c.collectNetworkMeasurements(ctx, labels)
-		c.lastUpdate = time.Now()
 	} else {
-		c.bandwidthCacheLock.RLock()
-		for nodeName, bandwidth := range c.bandwidthCache {
-			labels[fmt.Sprintf("%s%s", BandwidthPrefix, nodeName)] = strconv.FormatInt(bandwidth, 10)
+		// check for other storage types (local PVs, etc.)
+		hasLocalStorage, localCapacity := c.detectLocalStorage(ctx)
+		if hasLocalStorage {
+			labels[StorageNodeLabel] = "true"
+			labels[StorageTypeLabel] = "local"
+
+			if localCapacity > 0 {
+				labels[StorageCapacityLabel] = strconv.FormatInt(localCapacity, 10)
+			}
+
+			storageTech, err := c.detectStorageTechnology()
+			if err == nil && storageTech != "" {
+				labels[StorageTechLabel] = storageTech
+			}
+		} else {
+			labels[StorageNodeLabel] = ""
+			labels[StorageTypeLabel] = ""
 		}
-		c.bandwidthCacheLock.RUnlock()
 	}
 
-	deviceType, err := c.detectStorageDeviceType()
-	if err == nil && deviceType != "" {
-		labels["node-capability/device-storage-type"] = deviceType
-	}
+	// Update network measurements periodically
+	if time.Since(c.lastBandwidthUpdate) > BandwidthMeasurementInterval {
+		c.collectNetworkMeasurements(ctx, labels)
+		c.lastBandwidthUpdate = time.Now()
+	} else {
+		c.bandwidthCacheMutex.RLock()
+		for nodeName, bandwidth := range c.bandwidthCache {
+			labels[BandwidthPrefix+nodeName] = strconv.FormatInt(bandwidth, 10)
+		}
 
-	gpuCapability, gpuLabels := c.detectGPUCapabilities()
-	if gpuCapability {
-		maps.Copy(labels, gpuLabels)
+		for nodeName, latency := range c.bandwidthLatencyCache {
+			labels[LatencyPrefix+nodeName] = strconv.FormatFloat(latency, 'f', 2, 64)
+		}
+		c.bandwidthCacheMutex.RUnlock()
 	}
 
 	return labels, nil
 }
 
-// detectAndSetNodeType identifies if a node is edge or cloud
-func (c *DataLocalityCollector) detectAndSetNodeType(node *v1.Node, labels map[string]string) {
-	if nodeType, ok := node.Labels[EdgeNodeLabel]; ok {
+// detectAndSetNodeTopology identifies node type and topology
+func (c *DataLocalityCollector) detectAndSetNodeTopology(node *v1.Node, labels map[string]string) {
+	if nodeType, exists := node.Labels[EdgeNodeLabel]; exists {
 		c.nodeType = nodeType
 		labels[EdgeNodeLabel] = nodeType
-		return
-	}
+	} else {
+		isEdge := false
 
-	if strings.Contains(strings.ToLower(node.Name), "edge") {
-		c.nodeType = EdgeNodeValue
-		labels[EdgeNodeLabel] = EdgeNodeValue
-		return
-	}
-
-	isEdge := false
-
-	cpuCores := node.Status.Capacity.Cpu().Value()
-	memoryBytes := node.Status.Capacity.Memory().Value()
-
-	if cpuCores < 4 && memoryBytes < 8*1024*1024*1024 {
-		isEdge = true
-	}
-
-	for k, v := range node.Labels {
-		if (strings.Contains(k, "instance-type") &&
-			(strings.Contains(v, "small") || strings.Contains(v, "micro"))) ||
-			strings.Contains(k, "edge") ||
-			strings.Contains(k, "iot") {
+		if strings.Contains(strings.ToLower(node.Name), "edge") {
 			isEdge = true
-			break
+		}
+
+		cpuCores := node.Status.Capacity.Cpu().Value()
+		memoryBytes := node.Status.Allocatable.Memory().Value()
+
+		if cpuCores <= 4 && memoryBytes <= 8*1024*1024*1024 {
+			isEdge = true
+		}
+
+		for key, value := range node.Labels {
+			if strings.Contains(key, "instance-type") &&
+				(strings.Contains(value, "small") || strings.Contains(value, "micro")) {
+				isEdge = true
+				break
+			}
+		}
+
+		if isEdge {
+			c.nodeType = EdgeNodeValue
+			labels[EdgeNodeLabel] = EdgeNodeValue
+		} else {
+			c.nodeType = CloudNodeValue
+			labels[EdgeNodeLabel] = CloudNodeValue
 		}
 	}
 
-	if isEdge {
-		c.nodeType = EdgeNodeValue
-		labels[EdgeNodeLabel] = EdgeNodeValue
-	} else {
-		c.nodeType = CloudNodeValue
-		labels[EdgeNodeLabel] = CloudNodeValue
-	}
-}
-
-// detectAndSetTopology extracts region/zone information from node labels
-func (c *DataLocalityCollector) detectAndSetTopology(node *v1.Node, labels map[string]string) {
-	// extract region
-	if region, ok := node.Labels[RegionLabel]; ok {
+	if region, exists := node.Labels[RegionLabel]; exists {
 		c.region = region
 		labels[RegionLabel] = region
-	} else {
-		for k, v := range node.Labels {
-			if strings.Contains(k, "region") {
-				c.region = v
-				labels[RegionLabel] = v
-				break
-			}
-		}
 	}
 
-	// extract zone
-	if zone, ok := node.Labels[ZoneLabel]; ok {
+	if zone, exists := node.Labels[ZoneLabel]; exists {
 		c.zone = zone
 		labels[ZoneLabel] = zone
-	} else {
-		for k, v := range node.Labels {
-			if strings.Contains(k, "zone") {
-				c.zone = v
-				labels[ZoneLabel] = v
-				break
-			}
-		}
 	}
 }
 
-// detectMinIOService checks if MinIO is running on the node and gets bucket information
-func (c *DataLocalityCollector) detectMinIOService(ctx context.Context) (bool, []string, int64, error) {
+// detectStorageService checks for storage services like MinIO running on the node
+func (c *DataLocalityCollector) detectStorageService(ctx context.Context) (bool, []string, int64, error) {
+	// For now, we're just using labels and mock data since we're asked to mock MinIO connections
 	fieldSelector := fmt.Sprintf("spec.nodeName=%s", c.nodeName)
 
-	minioPods, err := c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+	pods, err := c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
 		FieldSelector: fieldSelector,
-		LabelSelector: MinIOSelector,
+		LabelSelector: "app=minio,app=storage-service",
 	})
 
 	if err != nil {
-		return false, nil, 0, fmt.Errorf("failed to list MinIO pods: %w", err)
+		return false, nil, 0, fmt.Errorf("failed to list storage service pods: %w", err)
 	}
 
-	if len(minioPods.Items) == 0 {
+	if len(pods.Items) == 0 {
 		return false, nil, 0, nil
 	}
 
-	buckets, err := c.collectMinioBuckets(ctx, minioPods.Items[0])
-	if err != nil {
-		klog.Warningf("Failed to collect MinIO buckets: %v", err)
-		// buckets = []string{"data", "models", "results", "eo-scenes", "cog-data"}
-	}
+	buckets := []string{"eo-scenes", "cog-data", "fmask-results", "data", "models"}
 
-	// Get storage capacity
-	var capacity int64
-	for _, pod := range minioPods.Items {
+	var storageCapacity int64
+	for _, pod := range pods.Items {
 		for _, volume := range pod.Spec.Volumes {
 			if volume.PersistentVolumeClaim != nil {
 				pvcName := volume.PersistentVolumeClaim.ClaimName
 				pvc, err := c.clientset.CoreV1().PersistentVolumeClaims(pod.Namespace).Get(ctx, pvcName, metav1.GetOptions{})
 				if err == nil {
-					if storage, ok := pvc.Status.Capacity["storage"]; ok {
-						capacity = storage.Value()
+					if storage, exists := pvc.Status.Capacity["storage"]; exists {
+						storageCapacity = storage.Value()
 						break
 					}
 				}
 			}
 		}
 
-		if capacity > 0 {
+		if storageCapacity > 0 {
 			break
 		}
 	}
 
-	return true, buckets, capacity, nil
+	return true, buckets, storageCapacity, nil
 }
 
-// detectNodeStorage checks for storage attached to the node via PersistentVolumes
-func (c *DataLocalityCollector) detectNodeStorage(ctx context.Context) (bool, map[string]string) {
-	labels := make(map[string]string)
-	hasStorage := false
-
-	// detect attached PVs
+// detectLocalStorage checks for local storage capabilities
+func (c *DataLocalityCollector) detectLocalStorage(ctx context.Context) (bool, int64) {
+	// Check for local PVs attached to this node
 	pvs, err := c.clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		klog.Warningf("Failed to list PersistentVolumes: %v", err)
-		return false, labels
+		return false, 0
 	}
 
 	var totalCapacity int64
-	var storageClasses []string
+	hasLocalStorage := false
 
 	for _, pv := range pvs.Items {
+		// Check if PV is local to this node
 		if c.isPVAttachedToNode(pv, c.nodeName) {
-			hasStorage = true
-			labels[StorageNodeLabel] = "true"
+			hasLocalStorage = true
 
-			if pv.Spec.StorageClassName != "" && !containsString(storageClasses, pv.Spec.StorageClassName) {
-				storageClasses = append(storageClasses, pv.Spec.StorageClassName)
-				labels[fmt.Sprintf("node-capability/storage-class-%s", pv.Spec.StorageClassName)] = "true"
-			}
-
-			if capacity, ok := pv.Spec.Capacity["storage"]; ok {
+			if capacity, exists := pv.Spec.Capacity["storage"]; exists {
 				totalCapacity += capacity.Value()
 			}
 		}
 	}
 
-	if hasStorage && totalCapacity > 0 {
-		labels["node-capability/storage-capacity"] = strconv.FormatInt(totalCapacity, 10)
-	}
-
-	return hasStorage, labels
+	return hasLocalStorage, totalCapacity
 }
 
-// isPVAttachedToNode checks if a PersistentVolume is attached to a specific node
+// isPVAttachedToNode checks if a PV is attached to this node
 func (c *DataLocalityCollector) isPVAttachedToNode(pv v1.PersistentVolume, nodeName string) bool {
+	// Check node affinity
 	if pv.Spec.NodeAffinity != nil && pv.Spec.NodeAffinity.Required != nil {
 		for _, term := range pv.Spec.NodeAffinity.Required.NodeSelectorTerms {
 			for _, expr := range term.MatchExpressions {
@@ -318,122 +274,130 @@ func (c *DataLocalityCollector) isPVAttachedToNode(pv v1.PersistentVolume, nodeN
 		}
 	}
 
+	// Check if this is a local volume
 	if pv.Spec.Local != nil {
 		return true
 	}
 
-	// Check if the volume is bound to a node via annotations
-	if boundNode, ok := pv.Annotations["volume.kubernetes.io/selected-node"]; ok {
-		return boundNode == c.nodeName
+	// Check annotations for node binding
+	if boundNode, exists := pv.Annotations["volume.kubernetes.io/selected-node"]; exists {
+		return boundNode == nodeName
 	}
 
 	return false
 }
 
-// collectMinioBuckets attempts to list buckets from a MinIO instance
-func (c *DataLocalityCollector) collectMinioBuckets(_ context.Context, pod v1.Pod) ([]string, error) {
-	return []string{"data", "temp", "results", "scenes"}, nil
+// detectStorageTechnology determines the type of storage (SSD, HDD, etc.)
+func (c *DataLocalityCollector) detectStorageTechnology() (string, error) {
+	// Check for NVMe drives
+	cmd := exec.Command("ls", "/dev/nvme*")
+	output, err := cmd.CombinedOutput()
+	if err == nil && len(output) > 0 {
+		return "nvme", nil
+	}
+
+	// Check for rotational status of primary disk
+	cmd = exec.Command("lsblk", "-d", "-n", "-o", "NAME,ROTA")
+	output, err = cmd.CombinedOutput()
+	if err == nil {
+		lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+		for _, line := range lines {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 && !strings.HasPrefix(fields[0], "loop") {
+				// ROTA=0 means non-rotational (SSD), ROTA=1 means rotational (HDD)
+				if fields[1] == "0" {
+					return "ssd", nil
+				} else if fields[1] == "1" {
+					return "hdd", nil
+				}
+			}
+		}
+	}
+
+	// Check if the root partition is mounted on SSD or HDD
+	cmd = exec.Command("findmnt", "-n", "-o", "SOURCE", "/")
+	output, err = cmd.CombinedOutput()
+	if err == nil {
+		source := strings.TrimSpace(string(output))
+		if strings.HasPrefix(source, "/dev/") {
+			// Extract device name
+			device := strings.TrimPrefix(source, "/dev/")
+			device = strings.Split(device, "p")[0] // Remove partition number
+			device = strings.TrimRight(device, "0123456789")
+
+			// Check rotational status
+			rotaPath := fmt.Sprintf("/sys/block/%s/queue/rotational", device)
+			cmd = exec.Command("cat", rotaPath)
+			output, err = cmd.CombinedOutput()
+			if err == nil {
+				if strings.TrimSpace(string(output)) == "0" {
+					return "ssd", nil
+				} else {
+					return "hdd", nil
+				}
+			}
+		}
+	}
+
+	return "unknown", fmt.Errorf("could not determine storage technology")
 }
 
-// collectNetworkMeasurements collects network performance measurements
+// collectNetworkMeasurements measures network bandwidth between nodes
 func (c *DataLocalityCollector) collectNetworkMeasurements(ctx context.Context, labels map[string]string) {
-	klog.Infof("Starting network measurement collection for node %s", c.nodeName)
+	klog.Infof("Starting network measurements for node %s", c.nodeName)
 
+	// Get list of all nodes
 	nodes, err := c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		klog.Warningf("Failed to list nodes for bandwidth measurement: %v", err)
 		return
 	}
 
-	labels["node-capability/bandwidth-local"] = "1000000000" // 1 GB/s
+	// Local bandwidth is always high
+	labels[BandwidthPrefix+"local"] = "1000000000" // 1 GB/s
+	labels[LatencyPrefix+"local"] = "0.1"          // 0.1ms
 
-	c.bandwidthCacheLock.Lock()
+	c.bandwidthCacheMutex.Lock()
 	c.bandwidthCache = make(map[string]int64)
 	c.bandwidthLatencyCache = make(map[string]float64)
-	c.bandwidthCacheLock.Unlock()
+	c.bandwidthCacheMutex.Unlock()
 
-	measuredCount := 0
-
-	var edgeNodes []v1.Node
-	var cloudNodes []v1.Node
-	var sameRegionNodes []v1.Node
-	var differentRegionNodes []v1.Node
+	// Group nodes by zone and region to prioritize measurements
+	var sameZoneNodes, sameRegionNodes, otherNodes []v1.Node
 
 	for _, node := range nodes.Items {
 		if node.Name == c.nodeName {
-			continue // skip self
+			continue // Skip self
 		}
 
 		if !isNodeReady(&node) {
-			continue
+			continue // Skip unready nodes
 		}
 
-		nodeType := CloudNodeValue
-		if val, ok := node.Labels[EdgeNodeLabel]; ok {
-			nodeType = val
-		} else if strings.Contains(strings.ToLower(node.Name), "edge") {
-			nodeType = EdgeNodeValue
-		}
-
-		if nodeType == EdgeNodeValue {
-			edgeNodes = append(edgeNodes, node)
+		// Categorize by zone/region proximity
+		if c.zone != "" && node.Labels[ZoneLabel] == c.zone {
+			sameZoneNodes = append(sameZoneNodes, node)
+		} else if c.region != "" && node.Labels[RegionLabel] == c.region {
+			sameRegionNodes = append(sameRegionNodes, node)
 		} else {
-			cloudNodes = append(cloudNodes, node)
-		}
-
-		if c.region != "" {
-			nodeRegion := node.Labels[RegionLabel]
-			if nodeRegion == c.region {
-				sameRegionNodes = append(sameRegionNodes, node)
-			} else if nodeRegion != "" {
-				differentRegionNodes = append(differentRegionNodes, node)
-			}
+			otherNodes = append(otherNodes, node)
 		}
 	}
 
-	var nodesToMeasure []v1.Node
+	// Prioritize measurement order: same zone, same region, others
+	// (with limits to avoid excessive measurements)
+	nodesToMeasure := append(sameZoneNodes, sameRegionNodes...)
+	nodesToMeasure = append(nodesToMeasure, otherNodes...)
 
-	nodesToMeasure = append(nodesToMeasure, sameRegionNodes...)
-
-	// Then add nodes based on edge/cloud type
-	if c.nodeType == EdgeNodeValue {
-		// Edge node should prioritize other edge nodes, then cloud
-		remainingEdge := filterOutNodes(edgeNodes, nodesToMeasure)
-		nodesToMeasure = append(nodesToMeasure, remainingEdge...)
-		remainingCloud := filterOutNodes(cloudNodes, nodesToMeasure)
-		nodesToMeasure = append(nodesToMeasure, remainingCloud...)
-	} else {
-		// Cloud node should prioritize other cloud nodes, then edge
-		remainingCloud := filterOutNodes(cloudNodes, nodesToMeasure)
-		nodesToMeasure = append(nodesToMeasure, remainingCloud...)
-		remainingEdge := filterOutNodes(edgeNodes, nodesToMeasure)
-		nodesToMeasure = append(nodesToMeasure, remainingEdge...)
-	}
-
-	// Finally add any remaining nodes
-	for _, node := range nodes.Items {
-		if node.Name == c.nodeName {
-			continue
-		}
-
-		if !isNodeReady(&node) {
-			continue
-		}
-
-		if !containsNode(nodesToMeasure, node.Name) {
-			nodesToMeasure = append(nodesToMeasure, node)
-		}
-	}
-
-	// Limit to measuring at most 10 nodes to avoid excessive load
+	// Limit to 10 nodes to avoid excess measurements
 	maxNodesToMeasure := 10
 	if len(nodesToMeasure) > maxNodesToMeasure {
 		nodesToMeasure = nodesToMeasure[:maxNodesToMeasure]
 	}
 
-	// Perform measurements
+	measuredCount := 0
 	for _, node := range nodesToMeasure {
-		// Get internal IP of the node
+		// Get node IP
 		var nodeIP string
 		for _, address := range node.Status.Addresses {
 			if address.Type == v1.NodeInternalIP {
@@ -447,72 +411,43 @@ func (c *DataLocalityCollector) collectNetworkMeasurements(ctx context.Context, 
 			continue
 		}
 
-		// Measure bandwidth
-		bandwidth, latency, err := c.MeasureBandwidth(nodeIP)
+		// Measure bandwidth and latency
+		bandwidth, latency, err := c.measureBandwidth(nodeIP)
 		if err != nil {
-			klog.Warningf("Failed to measure bandwidth to %s (%s): %v", node.Name, nodeIP, err)
-			// Use topology-aware estimation
+			klog.Warningf("Failed to measure bandwidth to node %s (%s): %v", node.Name, nodeIP, err)
+			// Use topology-based estimation instead
 			bandwidth, latency = c.estimateBandwidthFromTopology(node)
 		}
 
-		// Store in labels
-		bandwidthLabel := fmt.Sprintf("%s%s", BandwidthPrefix, node.Name)
-		labels[bandwidthLabel] = strconv.FormatInt(bandwidth, 10)
+		// Store results
+		labels[BandwidthPrefix+node.Name] = strconv.FormatInt(bandwidth, 10)
+		labels[LatencyPrefix+node.Name] = strconv.FormatFloat(latency, 'f', 2, 64)
 
-		// Store latency in a separate label
-		latencyLabel := fmt.Sprintf("node-capability/latency-to-%s", node.Name)
-		labels[latencyLabel] = strconv.FormatFloat(latency, 'f', 2, 64)
-
-		// Update cache
-		c.bandwidthCacheLock.Lock()
+		c.bandwidthCacheMutex.Lock()
 		c.bandwidthCache[node.Name] = bandwidth
 		c.bandwidthLatencyCache[node.Name] = latency
-		c.bandwidthCacheLock.Unlock()
+		c.bandwidthCacheMutex.Unlock()
 
 		measuredCount++
 		klog.V(4).Infof("Measured bandwidth to %s: %d bytes/sec, %.2f ms", node.Name, bandwidth, latency)
 	}
 
-	klog.Infof("Completed network measurements for node %s: measured %d nodes", c.nodeName, measuredCount)
+	klog.Infof("Network measurements complete for node %s: measured %d nodes", c.nodeName, measuredCount)
 }
 
-// MeasureBandwidth measures bandwidth between current node and another node
-func (c *DataLocalityCollector) MeasureBandwidth(targetIP string) (int64, float64, error) {
+// measureBandwidth measures network performance between nodes
+func (c *DataLocalityCollector) measureBandwidth(targetIP string) (int64, float64, error) {
 	if targetIP == "" {
-		return 10000000, 10.0, fmt.Errorf("empty target IP")
+		return 0, 0, fmt.Errorf("empty target IP")
 	}
 
-	// First, check if we can reach the target
-	timeout := 1 * time.Second
-	conn, err := net.DialTimeout("tcp", targetIP+":22", timeout)
+	// First get ping latency as it's more reliable
+	pingLatency, err := c.measurePingLatency(targetIP)
 	if err != nil {
-		// If we can't connect to SSH, try HTTP or HTTPS ports
-		conn, err = net.DialTimeout("tcp", targetIP+":80", timeout)
-		if err != nil {
-			conn, err = net.DialTimeout("tcp", targetIP+":443", timeout)
-			if err != nil {
-				// Fall back to ping-based estimation
-				return c.measureWithPing(targetIP)
-			}
-		}
+		return 0, 0, fmt.Errorf("ping failed: %w", err)
 	}
 
-	if conn != nil {
-		conn.Close()
-	}
-
-	// Measure ping latency first for a quick estimate
-	pingLatency, err := c.getPingLatency(targetIP)
-	if err != nil {
-		pingLatency = 10.0 // Default 10ms if ping fails
-	}
-
-	// Simple model based on latency:
-	// - Less than 1ms: likely local network, high bandwidth
-	// - 1-5ms: likely same datacenter, good bandwidth
-	// - 5-20ms: likely same region, decent bandwidth
-	// - 20-100ms: likely cross-region, lower bandwidth
-	// - 100ms+: likely cross-continent, poor bandwidth
+	// Based on latency, estimate bandwidth using a simple model
 	var bandwidth int64
 
 	switch {
@@ -530,87 +465,47 @@ func (c *DataLocalityCollector) MeasureBandwidth(targetIP string) (int64, float6
 		bandwidth = 10000000 // 10 MB/s for very high latency (cross-continent)
 	}
 
-	// For geospatial workloads, which often involve large file transfers,
-	// adjust bandwidth estimates based on workload characteristics
-	// Earth Observation data typically requires high-throughput connections
+	// Adjust bandwidth for edge nodes
 	if c.nodeType == EdgeNodeValue {
-		// Edge nodes typically have more limited bandwidth
 		bandwidth = int64(float64(bandwidth) * 0.7) // 30% reduction for edge nodes
 	}
 
 	return bandwidth, pingLatency, nil
 }
 
-// measureWithPing estimates bandwidth based on ping results
-func (c *DataLocalityCollector) measureWithPing(targetIP string) (int64, float64, error) {
-	latency, err := c.getPingLatency(targetIP)
-	if err != nil {
-		// Conservative default if ping fails
-		if c.nodeType == EdgeNodeValue {
-			return 10000000, 100.0, err // 10 MB/s, 100ms for edge nodes
-		}
-		return 50000000, 50.0, err // 50 MB/s, 50ms for cloud nodes
-	}
-
-	// Model bandwidth as inversely related to latency, with minimum thresholds
-	var bandwidth int64
-
-	switch {
-	case latency < 1.0:
-		bandwidth = 1000000000 // 1 GB/s
-	case latency < 5.0:
-		bandwidth = 500000000 // 500 MB/s
-	case latency < 20.0:
-		bandwidth = 200000000 // 200 MB/s
-	case latency < 50.0:
-		bandwidth = 100000000 // 100 MB/s
-	case latency < 100.0:
-		bandwidth = 50000000 // 50 MB/s
-	default:
-		bandwidth = 10000000 // 10 MB/s
-	}
-
-	// Adjust for edge nodes
-	if c.nodeType == EdgeNodeValue {
-		bandwidth = int64(float64(bandwidth) * 0.7) // 30% reduction for edge nodes
-	}
-
-	return bandwidth, latency, nil
-}
-
-// getPingLatency sends ICMP pings and calculates average latency
-func (c *DataLocalityCollector) getPingLatency(targetIP string) (float64, error) {
-	// Execute ping with 3 packets, 1 second timeout
+// measurePingLatency measures round-trip time to target
+func (c *DataLocalityCollector) measurePingLatency(targetIP string) (float64, error) {
+	// Execute ping command
 	cmd := exec.Command("ping", "-c", "3", "-W", "1", targetIP)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return 0, fmt.Errorf("ping failed: %w", err)
 	}
 
-	// Parse ping output to extract latency
+	// Parse ping output
 	outputStr := string(output)
 
 	// Look for the average round-trip time
-	// Example: rtt min/avg/max/mdev = 0.042/0.045/0.048/0.002 ms
 	rttIndex := strings.Index(outputStr, "min/avg/max")
 	if rttIndex == -1 {
-		return 100.0, fmt.Errorf("couldn't parse ping output")
+		return 0, fmt.Errorf("couldn't parse ping output")
 	}
 
-	// Extract the part after "="
-	rttPart := outputStr[strings.Index(outputStr[rttIndex:], "=")+rttIndex+1:]
+	avgStart := strings.Index(outputStr[rttIndex:], "=") + rttIndex + 1
+	if avgStart == -1 {
+		return 0, fmt.Errorf("couldn't find average ping time")
+	}
 
-	// Split by "/"
-	parts := strings.Split(rttPart, "/")
-	if len(parts) < 4 {
-		return 100.0, fmt.Errorf("unexpected ping output format")
+	parts := strings.Split(outputStr[avgStart:], "/")
+	if len(parts) < 2 {
+		return 0, fmt.Errorf("unexpected ping output format")
 	}
 
 	// Second part is the average
 	avgStr := strings.TrimSpace(parts[1])
 	avg, err := strconv.ParseFloat(avgStr, 64)
 	if err != nil {
-		return 100.0, fmt.Errorf("failed to parse average ping time: %w", err)
+		return 0, fmt.Errorf("failed to parse average ping time: %w", err)
 	}
 
 	return avg, nil
@@ -618,213 +513,65 @@ func (c *DataLocalityCollector) getPingLatency(targetIP string) (float64, error)
 
 // estimateBandwidthFromTopology estimates bandwidth based on node topology
 func (c *DataLocalityCollector) estimateBandwidthFromTopology(node v1.Node) (int64, float64) {
-	// Determine node type (edge vs cloud)
-	nodeType := CloudNodeValue
-	if val, ok := node.Labels[EdgeNodeLabel]; ok {
-		nodeType = val
+	// Get node type
+	targetType := CloudNodeValue
+	if value, exists := node.Labels[EdgeNodeLabel]; exists && value == EdgeNodeValue {
+		targetType = EdgeNodeValue
 	} else if strings.Contains(strings.ToLower(node.Name), "edge") {
-		nodeType = EdgeNodeValue
+		targetType = EdgeNodeValue
 	}
 
-	// Default bandwidth values based on node types
+	// Get region and zone
+	targetRegion := node.Labels[RegionLabel]
+	targetZone := node.Labels[ZoneLabel]
+
+	// Default values
 	var bandwidth int64
 	var latency float64
 
-	// Get region and zone
-	nodeRegion := node.Labels[RegionLabel]
-	nodeZone := node.Labels[ZoneLabel]
-
-	// Check if nodes are in the same zone
-	if c.zone != "" && c.zone == nodeZone {
-		if c.nodeType == EdgeNodeValue && nodeType == EdgeNodeValue {
-			// Edge to edge in same zone
-			bandwidth = 500000000 // 500 MB/s
-			latency = 1.0         // 1ms
-		} else if c.nodeType == CloudNodeValue && nodeType == CloudNodeValue {
-			// Cloud to cloud in same zone
-			bandwidth = 1000000000 // 1 GB/s
-			latency = 0.5          // 0.5ms
+	// Estimate based on topology relationship
+	if c.zone != "" && c.zone == targetZone {
+		// Same zone
+		if c.nodeType == EdgeNodeValue && targetType == EdgeNodeValue {
+			bandwidth = 500000000 // 500 MB/s for edge-to-edge in same zone
+			latency = 1.0         // 1ms latency
+		} else if c.nodeType == CloudNodeValue && targetType == CloudNodeValue {
+			bandwidth = 1000000000 // 1 GB/s for cloud-to-cloud in same zone
+			latency = 0.5          // 0.5ms latency
 		} else {
-			// Edge to cloud in same zone
-			bandwidth = 750000000 // 750 MB/s
-			latency = 1.0         // 1ms
+			bandwidth = 750000000 // 750 MB/s for edge-to-cloud in same zone
+			latency = 1.0         // 1ms latency
 		}
-	} else if c.region != "" && c.region == nodeRegion {
-		if c.nodeType == EdgeNodeValue && nodeType == EdgeNodeValue {
-			// Edge to edge in same region
-			bandwidth = 200000000 // 200 MB/s
-			latency = 5.0         // 5ms
-		} else if c.nodeType == CloudNodeValue && nodeType == CloudNodeValue {
-			// Cloud to cloud in same region
-			bandwidth = 500000000 // 500 MB/s
-			latency = 2.0         // 2ms
+	} else if c.region != "" && c.region == targetRegion {
+		// Same region, different zone
+		if c.nodeType == EdgeNodeValue && targetType == EdgeNodeValue {
+			bandwidth = 200000000 // 200 MB/s for edge-to-edge in same region
+			latency = 5.0         // 5ms latency
+		} else if c.nodeType == CloudNodeValue && targetType == CloudNodeValue {
+			bandwidth = 500000000 // 500 MB/s for cloud-to-cloud in same region
+			latency = 2.0         // 2ms latency
 		} else {
-			// Edge to cloud in same region
-			bandwidth = 100000000 // 100 MB/s
-			latency = 10.0        // 10ms
+			bandwidth = 100000000 // 100 MB/s for edge-to-cloud in same region
+			latency = 10.0        // 10ms latency
 		}
 	} else {
-		if c.nodeType == EdgeNodeValue && nodeType == EdgeNodeValue {
-			// Edge to edge across regions
-			bandwidth = 50000000 // 50 MB/s
+		// Different regions
+		if c.nodeType == EdgeNodeValue && targetType == EdgeNodeValue {
+			bandwidth = 50000000 // 50 MB/s edge-to-edge
 			latency = 50.0       // 50ms
-		} else if c.nodeType == CloudNodeValue && nodeType == CloudNodeValue {
-			// Cloud to cloud across regions
-			bandwidth = 100000000 // 100 MB/s
-			latency = 20.0        // 20ms
+		} else if c.nodeType == CloudNodeValue && targetType == CloudNodeValue {
+			bandwidth = 100000000 // 100 MB/s cloud-to-cloud
+			latency = 20.0        // 20ms latency
 		} else {
-			// Edge to cloud across regions
-			bandwidth = 20000000 // 20 MB/s
-			latency = 100.0      // 100ms
+			bandwidth = 20000000 // 20 MB/s  edge-to-cloud
+			latency = 100.0      // 100ms latency
 		}
-	}
-
-	// Add specific adjustment for Earth Observation workloads
-	// EO data is typically large and benefits from locality-aware placement
-	if c.nodeType == EdgeNodeValue && nodeType == CloudNodeValue {
-		// Edge to cloud transfers are especially challenging for EO data
-		bandwidth = int64(float64(bandwidth) * 0.8) // 20% reduction
-		latency = latency * 1.2                     // 20% increase
 	}
 
 	return bandwidth, latency
 }
 
-// detectStorageDeviceType attempts to determine the underlying storage type (SSD/HDD/NVMe)
-func (c *DataLocalityCollector) detectStorageDeviceType() (string, error) {
-	cmd := exec.Command("ls", "/dev/nvme*")
-	output, err := cmd.CombinedOutput()
-	if err == nil && len(output) > 0 {
-		return "nvme", nil
-	}
-
-	cmd = exec.Command("lsblk", "-d", "-o", "NAME,ROTA", "--json")
-	output, err = cmd.CombinedOutput()
-	if err == nil {
-		var result struct {
-			Blockdevices []struct {
-				Name string `json:"name"`
-				Rota bool   `json:"rota"`
-			} `json:"blockdevices"`
-		}
-
-		if err := json.Unmarshal(output, &result); err == nil {
-			for _, device := range result.Blockdevices {
-				if strings.HasPrefix(device.Name, "loop") {
-					continue
-				}
-
-				if device.Rota {
-					return "hdd", nil
-				} else {
-					return "ssd", nil
-				}
-			}
-		}
-	}
-
-	// Check for nvme module loaded
-	cmd = exec.Command("lsmod")
-	output, err = cmd.CombinedOutput()
-	if err == nil && strings.Contains(string(output), "nvme") {
-		return "nvme", nil
-	}
-
-	// Fall back to checking if rotational or not for the root filesystem
-	cmd = exec.Command("findmnt", "-n", "-o", "SOURCE", "/")
-	output, err = cmd.CombinedOutput()
-	if err == nil {
-		source := strings.TrimSpace(string(output))
-		if strings.HasPrefix(source, "/dev/") {
-			device := strings.TrimPrefix(source, "/dev/")
-			device = strings.TrimRight(device, "0123456789") // Remove partition number
-
-			// Check if it's rotational
-			rotaPath := fmt.Sprintf("/sys/block/%s/queue/rotational", device)
-			cmd = exec.Command("cat", rotaPath)
-			output, err = cmd.CombinedOutput()
-			if err == nil {
-				if strings.TrimSpace(string(output)) == "0" {
-					return "ssd", nil
-				} else {
-					return "hdd", nil
-				}
-			}
-		}
-	}
-
-	// Fallback to using df to estimate storage performance
-	cmd = exec.Command("df", "-T", "/")
-	output, err = cmd.CombinedOutput()
-	if err == nil {
-		outputStr := string(output)
-		if strings.Contains(outputStr, "ext4") || strings.Contains(outputStr, "xfs") {
-			// Most modern filesystems are on SSD now
-			return "ssd", nil
-		}
-	}
-
-	// Unknown type
-	return "", fmt.Errorf("could not determine storage type")
-}
-
-// detectGPUCapabilities checks for GPU availability for EO workloads
-func (c *DataLocalityCollector) detectGPUCapabilities() (bool, map[string]string) {
-	labels := make(map[string]string)
-
-	// Check for NVIDIA GPUs
-	cmd := exec.Command("nvidia-smi", "--query-gpu=name", "--format=csv,noheader")
-	output, err := cmd.CombinedOutput()
-	if err == nil && len(output) > 0 {
-		gpuName := strings.TrimSpace(string(output))
-		labels["node-capability/gpu-nvidia"] = "true"
-		labels["node-capability/gpu-model"] = sanitizeValue(gpuName)
-		labels["node-capability/gpu-accelerated"] = "true"
-
-		// Check for CUDA
-		cmd = exec.Command("nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader")
-		output, err = cmd.CombinedOutput()
-		if err == nil && len(output) > 0 {
-			driver := strings.TrimSpace(string(output))
-			labels["node-capability/nvidia-driver"] = sanitizeValue(driver)
-		}
-
-		// Special case for EO processing
-		labels["node-capability/eo-processing"] = "true"
-		return true, labels
-	}
-
-	// Check if GPU is listed in PCI devices
-	cmd = exec.Command("lspci")
-	output, err = cmd.CombinedOutput()
-	if err == nil {
-		outputStr := strings.ToLower(string(output))
-
-		if strings.Contains(outputStr, "nvidia") {
-			labels["node-capability/gpu-nvidia"] = "true"
-			labels["node-capability/gpu-accelerated"] = "true"
-			labels["node-capability/eo-processing"] = "true"
-			return true, labels
-		} else if strings.Contains(outputStr, "amd") &&
-			(strings.Contains(outputStr, "graphics") ||
-				strings.Contains(outputStr, "display")) {
-			labels["node-capability/gpu-amd"] = "true"
-			labels["node-capability/gpu-accelerated"] = "true"
-			labels["node-capability/eo-processing"] = "true"
-			return true, labels
-		} else if strings.Contains(outputStr, "intel") &&
-			(strings.Contains(outputStr, "graphics") ||
-				strings.Contains(outputStr, "display")) {
-			labels["node-capability/gpu-intel"] = "true"
-			labels["node-capability/eo-processing"] = "medium"
-			return true, labels
-		}
-	}
-
-	return false, labels
-}
-
-// isNodeReady checks if a node is in Ready condition
+// isNodeReady checks if a node is in the Ready condition
 func isNodeReady(node *v1.Node) bool {
 	for _, condition := range node.Status.Conditions {
 		if condition.Type == v1.NodeReady && condition.Status == v1.ConditionTrue {
@@ -832,68 +579,4 @@ func isNodeReady(node *v1.Node) bool {
 		}
 	}
 	return false
-}
-
-// Utility function to filter out nodes that are already in the list
-func filterOutNodes(allNodes []v1.Node, existingNodes []v1.Node) []v1.Node {
-	var result []v1.Node
-
-	for _, node := range allNodes {
-		if !containsNode(existingNodes, node.Name) {
-			result = append(result, node)
-		}
-	}
-
-	return result
-}
-
-// containsNode checks if a node name exists in a node list
-func containsNode(nodes []v1.Node, name string) bool {
-	for _, node := range nodes {
-		if node.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-// containsString checks if a string exists in a slice
-func containsString(slice []string, str string) bool {
-	for _, item := range slice {
-		if item == str {
-			return true
-		}
-	}
-	return false
-}
-
-// sanitizeValue sanitizes a label value according to Kubernetes requirements
-func sanitizeValue(value string) string {
-	// Replace invalid characters with hyphens
-	value = strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '.' || r == '_' {
-			return r
-		}
-		return '-'
-	}, value)
-
-	// Trim length to 63 characters as required by Kubernetes
-	if len(value) > 63 {
-		value = value[:63]
-	}
-
-	// Fix invalid starting/ending characters
-	if len(value) > 0 {
-		if !((value[0] >= 'a' && value[0] <= 'z') || (value[0] >= 'A' && value[0] <= 'Z') || (value[0] >= '0' && value[0] <= '9')) {
-			value = "x" + value[1:]
-		}
-
-		if len(value) > 1 && !((value[len(value)-1] >= 'a' && value[len(value)-1] <= 'z') ||
-			(value[len(value)-1] >= 'A' && value[len(value)-1] <= 'Z') ||
-			(value[len(value)-1] >= '0' && value[len(value)-1] <= '9')) {
-			value = value[:len(value)-1] + "x"
-		}
-	}
-
-	return value
 }

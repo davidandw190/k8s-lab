@@ -9,26 +9,42 @@ type StorageNodeType string
 const (
 	StorageTypeEdge  StorageNodeType = "edge"
 	StorageTypeCloud StorageNodeType = "cloud"
-	StorageTypeLocal StorageNodeType = "local"
 )
 
 type StorageServiceType string
 
 const (
-	StorageServiceMinIO StorageServiceType = "minio"
+	StorageServiceMinio   StorageServiceType = "minio"
+	StorageServiceGeneric StorageServiceType = "generic"
+	StorageServiceLocal   StorageServiceType = "local"
 )
 
-// DataItem represents a piece of data with its  metadata
+// DataItem represents a piece of data with its metadata
 type DataItem struct {
 	URN          string
 	Size         int64
-	Locations    []string
+	Locations    []string // node names that have this data
 	LastModified time.Time
 	ContentType  string
 	Metadata     map[string]string
 }
 
-// BandwidthInfo contains bandwidth information between nodes
+// StorageNode represents a node with storage capabilities
+type StorageNode struct {
+	Name              string
+	NodeType          StorageNodeType // edge/cloud
+	ServiceType       StorageServiceType
+	Region            string
+	Zone              string
+	CapacityBytes     int64
+	AvailableBytes    int64
+	StorageTechnology string
+	LastUpdated       time.Time
+	Buckets           []string
+	TopologyLabels    map[string]string
+}
+
+// BandwidthInfo represents network performance between nodes
 type BandwidthInfo struct {
 	SourceNode           string
 	DestNode             string
@@ -36,29 +52,4 @@ type BandwidthInfo struct {
 	LatencyMs            float64
 	MeasuredAt           time.Time
 	Reliability          float64
-}
-
-// StorageNode represents a node that provides storage capabilities
-type StorageNode struct {
-	Name              string
-	NodeType          StorageNodeType
-	ServiceType       StorageServiceType
-	CapacityBytes     int64
-	AvailableBytes    int64
-	StorageTechnology string
-	LastUpdated       time.Time
-	Buckets           []string
-	Region            string
-	Zone              string
-	TopologyLabels    map[string]string
-}
-
-// StorageTopology represents the storage layout across the cluster
-type StorageTopology struct {
-	NodeLocations map[string]struct {
-		Region string
-		Zone   string
-	}
-
-	BucketPlacements map[string][]string
 }

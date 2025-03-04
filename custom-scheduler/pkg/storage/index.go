@@ -8,8 +8,6 @@ import (
 
 	"slices"
 
-	"maps"
-
 	"k8s.io/klog/v2"
 )
 
@@ -22,7 +20,6 @@ type StorageIndex struct {
 	zoneNodes     map[string][]string
 	mu            sync.RWMutex
 	lastRefreshed time.Time
-	topology      StorageTopology
 }
 
 // NewStorageIndex creates a new storage index
@@ -34,10 +31,6 @@ func NewStorageIndex() *StorageIndex {
 		regionNodes:   make(map[string][]string),
 		zoneNodes:     make(map[string][]string),
 		lastRefreshed: time.Now(),
-		topology: StorageTopology{
-			NodeLocations:    make(map[string]struct{ Region, Zone string }),
-			BucketPlacements: make(map[string][]string),
-		},
 	}
 }
 
@@ -56,7 +49,7 @@ func (si *StorageIndex) RegisterStorageNode(node *StorageNode) {
 			si.removeNodeFromRegion(node.Name, oldNode.Region)
 		}
 
-		si.regionNodes[node.Region] = appendIfNotExists(si.regionNodes[node.Region], node.Name)
+		si.addNodeToRegion(node.Name, node.Region)
 	}
 
 	if node.Zone != "" {
@@ -64,12 +57,7 @@ func (si *StorageIndex) RegisterStorageNode(node *StorageNode) {
 			si.removeNodeFromZone(node.Name, oldNode.Zone)
 		}
 
-		si.zoneNodes[node.Zone] = appendIfNotExists(si.zoneNodes[node.Zone], node.Name)
-	}
-
-	si.topology.NodeLocations[node.Name] = struct{ Region, Zone string }{
-		Region: node.Region,
-		Zone:   node.Zone,
+		si.addNodeToZone(node.Name, node.Zone)
 	}
 
 	for _, bucket := range node.Buckets {
@@ -82,34 +70,51 @@ func (si *StorageIndex) RegisterStorageNode(node *StorageNode) {
 
 // removeNodeFromRegion removes a node from a region mapping
 func (si *StorageIndex) removeNodeFromRegion(nodeName, region string) {
-	if nodes, exists := si.regionNodes[region]; exists {
-		for i, name := range nodes {
-			if name == nodeName {
-				nodes[i] = nodes[len(nodes)-1]
-				si.regionNodes[region] = nodes[:len(nodes)-1]
-				break
-			}
+	nodes := si.regionNodes[region]
+	for i, name := range nodes {
+		if name == nodeName {
+			nodes[i] = nodes[len(nodes)-1]
+			si.regionNodes[region] = nodes[:len(nodes)-1]
+			return
 		}
 	}
+}
+
+// addNodeToRegion adds a node to a region mapping
+func (si *StorageIndex) addNodeToRegion(nodeName, region string) {
+	if slices.Contains(si.regionNodes[region], nodeName) {
+		return
+	}
+	si.regionNodes[region] = append(si.regionNodes[region], nodeName)
 }
 
 // removeNodeFromZone removes a node from a zone mapping
 func (si *StorageIndex) removeNodeFromZone(nodeName, zone string) {
-	if nodes, exists := si.zoneNodes[zone]; exists {
-		for i, name := range nodes {
-			if name == nodeName {
-				nodes[i] = nodes[len(nodes)-1]
-				si.zoneNodes[zone] = nodes[:len(nodes)-1]
-				break
-			}
+	nodes := si.zoneNodes[zone]
+	for i, name := range nodes {
+		if name == nodeName {
+			// Remove by swapping with last element and truncating
+			nodes[i] = nodes[len(nodes)-1]
+			si.zoneNodes[zone] = nodes[:len(nodes)-1]
+			return
 		}
 	}
 }
 
+// addNodeToZone adds a node to a zone mapping
+func (si *StorageIndex) addNodeToZone(nodeName, zone string) {
+	if slices.Contains(si.zoneNodes[zone], nodeName) {
+		return
+	}
+	si.zoneNodes[zone] = append(si.zoneNodes[zone], nodeName)
+}
+
 // registerBucketForNode associates a bucket with a node
 func (si *StorageIndex) registerBucketForNode(bucket, nodeName string) {
-	si.bucketNodes[bucket] = appendIfNotExists(si.bucketNodes[bucket], nodeName)
-	si.topology.BucketPlacements[bucket] = appendIfNotExists(si.topology.BucketPlacements[bucket], nodeName)
+	if slices.Contains(si.bucketNodes[bucket], nodeName) {
+		return
+	}
+	si.bucketNodes[bucket] = append(si.bucketNodes[bucket], nodeName)
 }
 
 // RemoveStorageNode removes a storage node from the index
@@ -145,7 +150,6 @@ func (si *StorageIndex) RemoveStorageNode(nodeName string) {
 		}
 	}
 
-	delete(si.topology.NodeLocations, nodeName)
 	delete(si.storageNodes, nodeName)
 
 	klog.V(4).Infof("Removed storage node %s from index", nodeName)
@@ -160,7 +164,6 @@ func (si *StorageIndex) RegisterBucket(bucket string, nodes []string) {
 	copy(nodesCopy, nodes)
 
 	si.bucketNodes[bucket] = nodesCopy
-	si.topology.BucketPlacements[bucket] = nodesCopy
 
 	klog.V(4).Infof("Registered bucket %s on nodes %v", bucket, nodes)
 }
@@ -185,7 +188,9 @@ func (si *StorageIndex) AddDataItem(item *DataItem) {
 			if existing.Metadata == nil {
 				existing.Metadata = make(map[string]string)
 			}
-			maps.Copy(existing.Metadata, item.Metadata)
+			for k, v := range item.Metadata {
+				existing.Metadata[k] = v
+			}
 		}
 	} else {
 		si.dataItems[item.URN] = item
@@ -230,8 +235,8 @@ func (si *StorageIndex) GetStorageNodesForData(urn string) []string {
 		return result
 	}
 
-	// Otherwise we try to infer from bucket info
-	// assuming format like "bucket/path/to/data"
+	// Otherwise infer from bucket information
+	// Assuming URN format: bucket/path/to/data
 	parts := strings.SplitN(urn, "/", 2)
 	if len(parts) < 1 {
 		return nil
@@ -314,58 +319,16 @@ func (si *StorageIndex) GetAllBuckets() []string {
 	return buckets
 }
 
-// GetRegionForNode returns the region for a given node
-func (si *StorageIndex) GetRegionForNode(nodeName string) string {
+// GetNodeType returns the type of a node (edge or cloud)
+func (si *StorageIndex) GetNodeType(nodeName string) StorageNodeType {
 	si.mu.RLock()
 	defer si.mu.RUnlock()
 
-	if location, ok := si.topology.NodeLocations[nodeName]; ok {
-		return location.Region
+	if node, exists := si.storageNodes[nodeName]; exists {
+		return node.NodeType
 	}
 
-	return ""
-}
-
-// GetZoneForNode returns the zone for a given node
-func (si *StorageIndex) GetZoneForNode(nodeName string) string {
-	si.mu.RLock()
-	defer si.mu.RUnlock()
-
-	if location, ok := si.topology.NodeLocations[nodeName]; ok {
-		return location.Zone
-	}
-
-	return ""
-}
-
-// GetNodesWithEdgeType returns nodes that are marked as edge nodes
-func (si *StorageIndex) GetNodesWithEdgeType() []string {
-	si.mu.RLock()
-	defer si.mu.RUnlock()
-
-	var edgeNodes []string
-	for name, node := range si.storageNodes {
-		if node.NodeType == StorageTypeEdge {
-			edgeNodes = append(edgeNodes, name)
-		}
-	}
-
-	return edgeNodes
-}
-
-// GetNodesWithCloudType returns nodes that are marked as cloud nodes
-func (si *StorageIndex) GetNodesWithCloudType() []string {
-	si.mu.RLock()
-	defer si.mu.RUnlock()
-
-	var cloudNodes []string
-	for name, node := range si.storageNodes {
-		if node.NodeType == StorageTypeCloud {
-			cloudNodes = append(cloudNodes, name)
-		}
-	}
-
-	return cloudNodes
+	return StorageTypeCloud // default to cloud if unknown
 }
 
 // MarkRefreshed updates the last refreshed timestamp
@@ -376,7 +339,7 @@ func (si *StorageIndex) MarkRefreshed() {
 	si.lastRefreshed = time.Now()
 }
 
-// GetLastRefreshed returns the time when the index was last fully refreshed
+// GetLastRefreshed returns the time when the index was last refreshed
 func (si *StorageIndex) GetLastRefreshed() time.Time {
 	si.mu.RLock()
 	defer si.mu.RUnlock()
@@ -384,7 +347,7 @@ func (si *StorageIndex) GetLastRefreshed() time.Time {
 	return si.lastRefreshed
 }
 
-// PruneStaleBuckets removes buckets that don't have any nodes
+// PruneStaleBuckets removes buckets without nodes
 func (si *StorageIndex) PruneStaleBuckets() int {
 	si.mu.Lock()
 	defer si.mu.Unlock()
@@ -393,7 +356,6 @@ func (si *StorageIndex) PruneStaleBuckets() int {
 	for bucket, nodes := range si.bucketNodes {
 		if len(nodes) == 0 {
 			delete(si.bucketNodes, bucket)
-			delete(si.topology.BucketPlacements, bucket)
 			count++
 		}
 	}
@@ -417,7 +379,7 @@ func (si *StorageIndex) PruneStaleDataItems() int {
 	return count
 }
 
-// PrintSummary returns a string representation of the storage index state
+// PrintSummary returns a string representation of the storage index
 func (si *StorageIndex) PrintSummary() string {
 	si.mu.RLock()
 	defer si.mu.RUnlock()
@@ -437,7 +399,7 @@ func (si *StorageIndex) PrintSummary() string {
 	for _, node := range si.storageNodes {
 		if node.NodeType == StorageTypeEdge {
 			edgeCount++
-		} else if node.NodeType == StorageTypeCloud {
+		} else {
 			cloudCount++
 		}
 	}
@@ -468,12 +430,4 @@ func (si *StorageIndex) PrintSummary() string {
 	}
 
 	return result.String()
-}
-
-// appendIfNotExists adds an element to a slice if it doesn't already exist
-func appendIfNotExists(slice []string, element string) []string {
-	if slices.Contains(slice, element) {
-		return slice
-	}
-	return append(slice, element)
 }
