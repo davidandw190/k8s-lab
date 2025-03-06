@@ -1,71 +1,72 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: custom-scheduler
+  name: data-locality-scheduler
   namespace: custom-scheduler
   labels:
-    app: custom-scheduler
+    app: data-locality-scheduler
   annotations:
-    description: "Deployment for the custom Kubernetes scheduler with data locality awareness capabilities"
+    description: "Deployment for the data locality aware Kubernetes scheduler"
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: custom-scheduler
+      app: data-locality-scheduler
   template:
     metadata:
       labels:
-        app: custom-scheduler
+        app: data-locality-scheduler
     spec:
       serviceAccountName: custom-scheduler
       containers:
-      - name: custom-scheduler
-        image: custom-scheduler:latest
-        imagePullPolicy: Never
+      - name: scheduler
+        image: data-locality-scheduler:latest # TODO: replace with image reference in prod
+        imagePullPolicy: IfNotPresent
         args:
-        - "--scheduler-name=custom-scheduler"
-        - "--v=3"
+        - "--scheduler-name=data-locality-scheduler"
+        - "--enable-data-locality=true"
+        - "--same-zone-bandwidth-mbps=500"
+        - "--same-region-bandwidth-mbps=200"
+        - "--edge-cloud-bandwidth-mbps=25"
+        - "--v=2"
         ports:
         - containerPort: 8080
           name: http
-        # readinessProbe:
-        #   httpGet:
-        #     path: /healthz
-        #     port: 8080
-        #   initialDelaySeconds: 5
-        #   periodSeconds: 10
-        # livenessProbe:
-        #   httpGet:
-        #     path: /healthz
-        #     port: 8080
-        #   initialDelaySeconds: 15
-        #   periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 20
         resources:
           requests:
             cpu: 100m
-            memory: 100Mi
+            memory: 128Mi
           limits:
-            cpu: 200m
-            memory: 200Mi
+            cpu: 300m
+            memory: 512Mi
         securityContext:
+          runAsNonRoot: true
           runAsUser: 1000
-          runAsGroup: 1000
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-            - ALL
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: custom-scheduler-health
+  name: data-locality-scheduler
   namespace: custom-scheduler
   annotations:
-    description: "Service exposing health check endpoint for the custom scheduler"
+    description: "Service exposing health check and API endpoints for the scheduler"
 spec:
   selector:
-    app: custom-scheduler
+    app: data-locality-scheduler
   ports:
   - port: 8080
     targetPort: 8080
+    name: http
   type: ClusterIP

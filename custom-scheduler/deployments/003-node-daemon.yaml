@@ -5,8 +5,6 @@ metadata:
   namespace: custom-scheduler
   labels:
     app: node-capability-daemon
-  annotations:
-    description: "DaemonSet that runs the node capability collection daemon on every cluster node"
 spec:
   selector:
     matchLabels:
@@ -20,26 +18,69 @@ spec:
       containers:
       - name: node-capability-daemon
         image: node-daemon:latest
-        imagePullPolicy: Never
+        imagePullPolicy: IfNotPresent
         args:
-        - "--collection-interval=30"
-        - "--v=3"
+        - "--collection-interval=60"
+        - "--enable-data-locality=true"
+        - "--health-port=8080"
+        - "--v=2"
         env:
         - name: NODE_NAME
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
-        # resources:
-        #   requests:
-        #     cpu: 50m
-        #     memory: 50Mi
-        #   limits:
-        #     cpu: 100m
-        #     memory: 100Mi
-        # securityContext:
-        #   runAsUser: 1000
-        #   runAsGroup: 1000
-        #   allowPrivilegeEscalation: false
-        #   capabilities:
-        #     drop:
-        #     - ALL
+        - name: NODE_REGION
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['topology.kubernetes.io/region']
+        - name: NODE_ZONE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['topology.kubernetes.io/zone']
+        ports:
+        - containerPort: 8080
+          name: http
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        volumeMounts:
+        - name: sys
+          mountPath: /sys
+          readOnly: true
+        - name: dev
+          mountPath: /dev
+          readOnly: false # to allow K8s to write to /dev/termination-log
+        - name: proc
+          mountPath: /proc
+          readOnly: true
+      volumes:
+      - name: sys
+        hostPath:
+          path: /sys
+      - name: dev
+        hostPath:
+          path: /dev
+      - name: proc
+        hostPath:
+          path: /proc
+      tolerations:
+      - operator: "Exists"
+        effect: "NoSchedule"
+      - operator: "Exists"
+        effect: "NoExecute"

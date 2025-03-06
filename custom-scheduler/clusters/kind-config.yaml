@@ -1,0 +1,19 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  extraPortMappings:
+  - containerPort: 30000
+    hostPort: 30000
+  - containerPort: 30001
+    hostPort: 30001
+- role: worker
+  labels:
+    node-capability/node-type: edge
+    topology.kubernetes.io/region: region-1
+    topology.kubernetes.io/zone: zone-1-edge
+- role: worker
+  labels:
+    node-capability/node-type: cloud
+    topology.kubernetes.io/region: region-1
+    topology.kubernetes.io/zone: zone-1-cloud
