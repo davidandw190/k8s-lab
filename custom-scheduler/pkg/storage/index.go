@@ -42,7 +42,7 @@ func (si *StorageIndex) RegisterStorageNode(node *StorageNode) {
 
 	si.storageNodes[node.Name] = node
 
-	// Update region mappings
+	// update region mappings
 	if node.Region != "" {
 		if exists && oldNode.Region != "" && oldNode.Region != node.Region {
 			si.removeNodeFromRegion(node.Name, oldNode.Region)
@@ -50,7 +50,7 @@ func (si *StorageIndex) RegisterStorageNode(node *StorageNode) {
 		si.addNodeToRegion(node.Name, node.Region)
 	}
 
-	// Update zone mappings
+	// update zone mappings
 	if node.Zone != "" {
 		if exists && oldNode.Zone != "" && oldNode.Zone != node.Zone {
 			si.removeNodeFromZone(node.Name, oldNode.Zone)
@@ -58,7 +58,7 @@ func (si *StorageIndex) RegisterStorageNode(node *StorageNode) {
 		si.addNodeToZone(node.Name, node.Zone)
 	}
 
-	// Update bucket mappings
+	// update bucket mappings
 	for _, bucket := range node.Buckets {
 		si.registerBucketForNode(bucket, node.Name)
 	}
@@ -72,7 +72,6 @@ func (si *StorageIndex) removeNodeFromRegion(nodeName, region string) {
 	nodes := si.regionNodes[region]
 	for i, name := range nodes {
 		if name == nodeName {
-			// Remove efficiently
 			nodes[i] = nodes[len(nodes)-1]
 			si.regionNodes[region] = nodes[:len(nodes)-1]
 			return
@@ -82,7 +81,6 @@ func (si *StorageIndex) removeNodeFromRegion(nodeName, region string) {
 
 // addNodeToRegion adds a node to a region mapping
 func (si *StorageIndex) addNodeToRegion(nodeName, region string) {
-	// Check if already present
 	for _, name := range si.regionNodes[region] {
 		if name == nodeName {
 			return
@@ -96,7 +94,6 @@ func (si *StorageIndex) removeNodeFromZone(nodeName, zone string) {
 	nodes := si.zoneNodes[zone]
 	for i, name := range nodes {
 		if name == nodeName {
-			// Remove efficiently
 			nodes[i] = nodes[len(nodes)-1]
 			si.zoneNodes[zone] = nodes[:len(nodes)-1]
 			return
@@ -106,7 +103,6 @@ func (si *StorageIndex) removeNodeFromZone(nodeName, zone string) {
 
 // addNodeToZone adds a node to a zone mapping
 func (si *StorageIndex) addNodeToZone(nodeName, zone string) {
-	// Check if already present
 	for _, name := range si.zoneNodes[zone] {
 		if name == nodeName {
 			return
@@ -117,7 +113,6 @@ func (si *StorageIndex) addNodeToZone(nodeName, zone string) {
 
 // registerBucketForNode associates a bucket with a node
 func (si *StorageIndex) registerBucketForNode(bucket, nodeName string) {
-	// Check if already present
 	for _, name := range si.bucketNodes[bucket] {
 		if name == nodeName {
 			return
@@ -136,17 +131,17 @@ func (si *StorageIndex) RemoveStorageNode(nodeName string) {
 		return
 	}
 
-	// Remove from region mapping
+	// remove from region mapping
 	if node.Region != "" {
 		si.removeNodeFromRegion(nodeName, node.Region)
 	}
 
-	// Remove from zone mapping
+	// remove from zone mapping
 	if node.Zone != "" {
 		si.removeNodeFromZone(nodeName, node.Zone)
 	}
 
-	// Remove from all bucket mappings
+	// remove from all bucket mappings
 	for bucket, nodes := range si.bucketNodes {
 		var newNodes []string
 		for _, name := range nodes {
@@ -161,7 +156,7 @@ func (si *StorageIndex) RemoveStorageNode(nodeName string) {
 		}
 	}
 
-	// Remove from data locations
+	// remove from data locations
 	for urn, item := range si.dataItems {
 		var newLocations []string
 		for _, loc := range item.Locations {
@@ -172,7 +167,6 @@ func (si *StorageIndex) RemoveStorageNode(nodeName string) {
 		if len(newLocations) > 0 {
 			item.Locations = newLocations
 		} else {
-			// Data no longer exists anywhere
 			delete(si.dataItems, urn)
 		}
 	}
@@ -197,7 +191,7 @@ func (si *StorageIndex) AddDataItem(item *DataItem) {
 	defer si.mu.Unlock()
 
 	if existing, exists := si.dataItems[item.URN]; exists {
-		// Update existing
+		// update existing
 		existing.Size = item.Size
 		existing.Locations = make([]string, len(item.Locations))
 		copy(existing.Locations, item.Locations)
@@ -213,7 +207,7 @@ func (si *StorageIndex) AddDataItem(item *DataItem) {
 			}
 		}
 	} else {
-		// Create new
+		// create new
 		newItem := &DataItem{
 			URN:          item.URN,
 			Size:         item.Size,
@@ -246,7 +240,6 @@ func (si *StorageIndex) GetDataItem(urn string) (*DataItem, bool) {
 		return nil, false
 	}
 
-	// Return a copy to avoid concurrent modification issues
 	itemCopy := &DataItem{
 		URN:          item.URN,
 		Size:         item.Size,
@@ -285,14 +278,14 @@ func (si *StorageIndex) GetStorageNodesForData(urn string) []string {
 	si.mu.RLock()
 	defer si.mu.RUnlock()
 
-	// First check if we have direct information about this data item
+	// first check if we have direct information about this data item
 	if item, exists := si.dataItems[urn]; exists && len(item.Locations) > 0 {
 		result := make([]string, len(item.Locations))
 		copy(result, item.Locations)
 		return result
 	}
 
-	// Otherwise infer from bucket information
+	// otherwise infer from bucket information
 	// Assuming URN format: bucket/path/to/data
 	parts := strings.SplitN(urn, "/", 2)
 	if len(parts) < 1 {
@@ -320,7 +313,6 @@ func (si *StorageIndex) GetStorageNode(nodeName string) (*StorageNode, bool) {
 		return nil, false
 	}
 
-	// Return a copy to avoid concurrent modification issues
 	nodeCopy := &StorageNode{
 		Name:              node.Name,
 		NodeType:          node.NodeType,
@@ -481,7 +473,6 @@ func (si *StorageIndex) MockMinioData() {
 	si.mu.Lock()
 	defer si.mu.Unlock()
 
-	// Create standard buckets for EO workflows
 	buckets := []string{
 		"eo-scenes",
 		"cog-data",
@@ -490,7 +481,7 @@ func (si *StorageIndex) MockMinioData() {
 		"stac-catalog",
 	}
 
-	// Find storage nodes
+	// find storage nodes
 	var storageNodeNames []string
 	for name, node := range si.storageNodes {
 		if node.ServiceType == StorageServiceMinio {
@@ -498,7 +489,7 @@ func (si *StorageIndex) MockMinioData() {
 		}
 	}
 
-	// If no storage nodes found, create mock entries
+	// if no storage nodes found, create mock entries
 	if len(storageNodeNames) == 0 {
 		klog.Warning("No MinIO storage nodes found, using all nodes for mock data")
 		for name := range si.storageNodes {
@@ -506,7 +497,7 @@ func (si *StorageIndex) MockMinioData() {
 		}
 	}
 
-	// Register buckets
+	// register buckets
 	for _, bucket := range buckets {
 		si.bucketNodes[bucket] = make([]string, len(storageNodeNames))
 		copy(si.bucketNodes[bucket], storageNodeNames)
@@ -530,7 +521,7 @@ func (si *StorageIndex) MockMinioData() {
 		}
 	}
 
-	// Create sample data items
+	// sample data items
 	mockItems := []struct {
 		urn      string
 		size     int64
@@ -544,7 +535,6 @@ func (si *StorageIndex) MockMinioData() {
 	}
 
 	for _, mockItem := range mockItems {
-		// Randomly distribute data across some nodes
 		var locations []string
 		for _, nodeName := range storageNodeNames {
 			if node, exists := si.storageNodes[nodeName]; exists {

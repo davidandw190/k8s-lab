@@ -13,24 +13,24 @@ import (
 
 // BandwidthGraph tracks network performance between nodes
 type BandwidthGraph struct {
-	// Maps from source->dest->path
+	// source->dest->path
 	pathMap     map[string]map[string]*NetworkPath
 	nodeRegions map[string]string
 	nodeZones   map[string]string
 	nodeTypes   map[string]StorageNodeType
-	// Default settings for different network topologies
-	localBandwidth       float64 // bytes/sec for same-node transfers
-	localLatency         float64 // ms for same-node transfers
-	sameZoneBandwidth    float64 // bytes/sec within zone
-	sameZoneLatency      float64 // ms within zone
-	sameRegionBandwidth  float64 // bytes/sec within region
-	sameRegionLatency    float64 // ms within region
-	crossRegionBandwidth float64 // bytes/sec between regions
-	crossRegionLatency   float64 // ms between regions
-	edgeCloudBandwidth   float64 // bytes/sec edge->cloud
-	edgeCloudLatency     float64 // ms edge->cloud
-	defaultBandwidth     float64 // bytes/sec fallback
-	defaultLatency       float64 // ms fallback
+	// default settings
+	localBandwidth       float64 // bytes/sec
+	localLatency         float64 // ms
+	sameZoneBandwidth    float64 // bytes/sec
+	sameZoneLatency      float64 // ms
+	sameRegionBandwidth  float64 // bytes/sec
+	sameRegionLatency    float64 // ms
+	crossRegionBandwidth float64 // bytes/sec
+	crossRegionLatency   float64 // ms
+	edgeCloudBandwidth   float64 // bytes/sec
+	edgeCloudLatency     float64 // ms
+	defaultBandwidth     float64 // bytes/sec
+	defaultLatency       float64 // ms
 	mu                   sync.RWMutex
 	lastUpdated          time.Time
 }
@@ -52,8 +52,8 @@ func NewBandwidthGraph(defaultBandwidth float64) *BandwidthGraph {
 		sameRegionLatency:    5.0,   // 5ms
 		crossRegionBandwidth: 50e6,  // 50 MB/s
 		crossRegionLatency:   30.0,  // 30ms
-		edgeCloudBandwidth:   25e6,  // 25 MB/s (more conservative)
-		edgeCloudLatency:     40.0,  // 40ms (more realistic)
+		edgeCloudBandwidth:   25e6,  // 25 MB/s
+		edgeCloudLatency:     40.0,  // 40ms
 		lastUpdated:          time.Now(),
 	}
 }
@@ -115,7 +115,6 @@ func (bg *BandwidthGraph) GetNetworkPath(source, dest string) *NetworkPath {
 	bg.mu.RLock()
 	defer bg.mu.RUnlock()
 
-	// Same node has local bandwidth
 	if source == dest {
 		return &NetworkPath{
 			SourceNode:  source,
@@ -128,14 +127,14 @@ func (bg *BandwidthGraph) GetNetworkPath(source, dest string) *NetworkPath {
 		}
 	}
 
-	// Check direct measurement from source to dest
+	// direct measurement from source to dest
 	if sourceMap, exists := bg.pathMap[source]; exists {
 		if path, exists := sourceMap[dest]; exists {
 			return path
 		}
 	}
 
-	// Check reverse path (assuming symmetric network)
+	// reverse path (assuming symmetric network)
 	if sourceMap, exists := bg.pathMap[dest]; exists {
 		if path, exists := sourceMap[source]; exists {
 			return &NetworkPath{
@@ -144,19 +143,18 @@ func (bg *BandwidthGraph) GetNetworkPath(source, dest string) *NetworkPath {
 				Bandwidth:   path.Bandwidth,
 				Latency:     path.Latency,
 				MeasuredAt:  path.MeasuredAt,
-				Reliability: path.Reliability * 0.9, // Slightly less reliable in reverse
+				Reliability: path.Reliability * 0.9,
 				IsEstimated: true,
 			}
 		}
 	}
 
-	// Estimate based on topology
 	return bg.estimateFromTopology(source, dest)
 }
 
 // estimateFromTopology estimates bandwidth based on node topology
 func (bg *BandwidthGraph) estimateFromTopology(source, dest string) *NetworkPath {
-	// Check zone relationship
+	// check zone relationship
 	sourceZone := bg.nodeZones[source]
 	destZone := bg.nodeZones[dest]
 	if sourceZone != "" && sourceZone == destZone {
@@ -171,7 +169,7 @@ func (bg *BandwidthGraph) estimateFromTopology(source, dest string) *NetworkPath
 		}
 	}
 
-	// Check region relationship
+	// check region relationship
 	sourceRegion := bg.nodeRegions[source]
 	destRegion := bg.nodeRegions[dest]
 	if sourceRegion != "" && sourceRegion == destRegion {
@@ -186,7 +184,7 @@ func (bg *BandwidthGraph) estimateFromTopology(source, dest string) *NetworkPath
 		}
 	}
 
-	// Check node types (edge vs cloud)
+	// check node types (edge vs cloud)
 	sourceType := bg.nodeTypes[source]
 	destType := bg.nodeTypes[dest]
 	if (sourceType == StorageTypeEdge && destType == StorageTypeCloud) ||
@@ -202,7 +200,6 @@ func (bg *BandwidthGraph) estimateFromTopology(source, dest string) *NetworkPath
 		}
 	}
 
-	// Different regions
 	if sourceRegion != "" && destRegion != "" && sourceRegion != destRegion {
 		return &NetworkPath{
 			SourceNode:  source,
@@ -215,7 +212,6 @@ func (bg *BandwidthGraph) estimateFromTopology(source, dest string) *NetworkPath
 		}
 	}
 
-	// Default fallback
 	return &NetworkPath{
 		SourceNode:  source,
 		DestNode:    dest,
@@ -240,27 +236,22 @@ func (bg *BandwidthGraph) EstimateTransferTime(source, dest string, sizeBytes in
 		bandwidth = bg.defaultBandwidth
 	}
 
-	// Basic transfer time calculation
 	transferTime := float64(sizeBytes) / bandwidth
-
-	// Add initial latency (connection setup)
 	transferTime += path.Latency / 1000.0
 
-	// Add overhead for protocol, network variability
-	if sizeBytes > 10*1024*1024 { // Over 10MB
+	if sizeBytes > 10*1024*1024 { // over 10MB
 		transferTime *= 1.1 // 10% overhead
 	}
 
-	// Add reliability factor - less reliable paths take longer in practice
+	// reliability factor - less reliable paths take longer in practice
 	reliabilityFactor := 1.0 + (1.0-path.Reliability)*0.5
 	transferTime *= reliabilityFactor
 
-	// Special case for edge nodes as source (often have upload bandwidth constraints)
 	bg.mu.RLock()
 	nodeType := bg.nodeTypes[source]
 	bg.mu.RUnlock()
 	if nodeType == StorageTypeEdge && source != dest {
-		transferTime *= 1.2 // Add 20% to account for limited uplink
+		transferTime *= 1.2 // +20% to account for limited uplink
 	}
 
 	return transferTime
@@ -270,16 +261,11 @@ func (bg *BandwidthGraph) EstimateTransferTime(source, dest string, sizeBytes in
 func (bg *BandwidthGraph) RemoveNode(nodeName string) {
 	bg.mu.Lock()
 	defer bg.mu.Unlock()
-
-	// Remove as source
 	delete(bg.pathMap, nodeName)
-
-	// Remove as destination from all sources
 	for _, destMap := range bg.pathMap {
 		delete(destMap, nodeName)
 	}
 
-	// Remove from topology maps
 	delete(bg.nodeRegions, nodeName)
 	delete(bg.nodeZones, nodeName)
 	delete(bg.nodeTypes, nodeName)
@@ -323,7 +309,6 @@ func (bg *BandwidthGraph) SetTopologyDefaults(
 		bg.edgeCloudLatency = edgeCloudLatency
 	}
 
-	// Derive cross-region values
 	bg.crossRegionBandwidth = bg.sameRegionBandwidth * 0.25
 	bg.crossRegionLatency = bg.sameRegionLatency * 6.0
 
@@ -392,7 +377,6 @@ func (bg *BandwidthGraph) PrintSummary() string {
 			}
 		}
 
-		// Sort by bandwidth, highest first
 		sort.Slice(paths, func(i, j int) bool {
 			return paths[i].path.Bandwidth > paths[j].path.Bandwidth
 		})
@@ -425,14 +409,14 @@ func (bg *BandwidthGraph) MockNetworkPaths() {
 	bg.mu.Lock()
 	defer bg.mu.Unlock()
 
-	// Create mock paths based on topology
+	// mock paths based on topology
 	for source, sourceRegion := range bg.nodeRegions {
 		sourceZone := bg.nodeZones[source]
 		sourceType := bg.nodeTypes[source]
 
 		for dest, destRegion := range bg.nodeRegions {
 			if source == dest {
-				continue // Skip self
+				continue
 			}
 
 			destZone := bg.nodeZones[dest]
@@ -442,7 +426,7 @@ func (bg *BandwidthGraph) MockNetworkPaths() {
 			var latency float64
 			var reliability float64
 
-			// Determine path characteristics based on topology relationship
+			// determine path characteristics based on topology relationship
 			if sourceZone != "" && sourceZone == destZone {
 				// Same zone
 				bandwidth = bg.sameZoneBandwidth
@@ -466,12 +450,10 @@ func (bg *BandwidthGraph) MockNetworkPaths() {
 				reliability = 0.6
 			}
 
-			// Add some randomness for realism
-			jitterFactor := 0.85 + (rand.Float64() * 0.3) // 0.85-1.15
+			jitterFactor := 0.85 + (rand.Float64() * 0.3)
 			bandwidth *= jitterFactor
-			latency *= 2.0 - jitterFactor // Inverse relationship
+			latency *= 2.0 - jitterFactor
 
-			// Create the path
 			if _, exists := bg.pathMap[source]; !exists {
 				bg.pathMap[source] = make(map[string]*NetworkPath)
 			}

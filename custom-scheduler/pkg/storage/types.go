@@ -23,12 +23,12 @@ const (
 
 // DataItem represents a piece of data with its metadata
 type DataItem struct {
-	URN          string            // Uniform Resource Name (bucket/path)
-	Size         int64             // Size in bytes
-	Locations    []string          // Node names that have this data
-	LastModified time.Time         // Last modification time
-	ContentType  string            // MIME type
-	Metadata     map[string]string // Additional metadata
+	URN          string
+	Size         int64
+	Locations    []string // node names that have this data
+	LastModified time.Time
+	ContentType  string
+	Metadata     map[string]string
 }
 
 // StorageNode represents a node with storage capabilities
@@ -40,9 +40,9 @@ type StorageNode struct {
 	Zone              string
 	CapacityBytes     int64
 	AvailableBytes    int64
-	StorageTechnology string // ssd, hdd, nvme
+	StorageTechnology string
 	LastUpdated       time.Time
-	Buckets           []string // Buckets available on this node
+	Buckets           []string
 	TopologyLabels    map[string]string
 }
 
@@ -50,9 +50,9 @@ type StorageNode struct {
 type NetworkPath struct {
 	SourceNode  string
 	DestNode    string
-	Bandwidth   float64 // Bytes per second
-	Latency     float64 // Milliseconds
+	Bandwidth   float64
+	Latency     float64
 	MeasuredAt  time.Time
-	Reliability float64 // 0.0-1.0 score of reliability
-	IsEstimated bool    // Whether this is measured or estimated
+	Reliability float64
+	IsEstimated bool
 }
