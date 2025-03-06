@@ -4,19 +4,20 @@ metadata:
   name: test-pod
   namespace: custom-scheduler
   annotations:
-    description: "Test pod that utilizes the custom scheduler for placement"
-    scheduler.thesis/required-capability: "compute"
-    scheduler.thesis/memory-intensive: "true"
+    description: "Test pod that utilizes the data locality scheduler"
+    data.scheduler.thesis/input-1: "eo-scenes/sample-scene.tif,104857600,10,4,geotiff"
+    data.scheduler.thesis/output-1: "cog-data/processed-scene.tif,52428800,0,4,cog"
 spec:
-  schedulerName: custom-scheduler
+  schedulerName: data-locality-scheduler
   containers:
-  - name: nginx
-    image: nginx:latest
+  - name: eo-processor
+    image: python:3.9
+    command: [ "sleep", "3600" ]
     resources:
       requests:
-        memory: "64Mi"
-        cpu: "100m"
-      limits:
-        memory: "128Mi"
+        memory: "256Mi"
         cpu: "200m"
+      limits:
+        memory: "512Mi"
+        cpu: "400m"
   restartPolicy: Never
