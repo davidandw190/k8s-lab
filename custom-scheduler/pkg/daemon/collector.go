@@ -57,19 +57,19 @@ func (c *NodeCapabilityCollector) CollectAndUpdateCapabilities(ctx context.Conte
 	c.collectPlatformInfo()
 
 	if err := c.collectComputeCapabilities(); err != nil {
-		klog.Warning(err, "Partial failure collecting compute capabilities")
+		klog.Warning("Partial failure collecting compute capabilities:", err)
 	}
 
 	if err := c.collectMemoryCapabilities(); err != nil {
-		klog.Warning(err, "Partial failure collecting memory capabilities")
+		klog.Warning("Partial failure collecting memory capabilities:", err)
 	}
 
 	if err := c.collectStorageCapabilities(); err != nil {
-		klog.Warning(err, "Partial failure collecting storage capabilities")
+		klog.Warning("Partial failure collecting storage capabilities:", err)
 	}
 
 	if err := c.collectNetworkCapabilities(); err != nil {
-		klog.Warning(err, "Partial failure collecting network capabilities")
+		klog.Warning("Partial failure collecting network capabilities:", err)
 	}
 
 	c.detectSpecializedHardware()
@@ -712,7 +712,7 @@ func (c *NodeCapabilityCollector) updateNodeLabels(ctx context.Context) error {
 		labelKey := fmt.Sprintf("%s/%s", LabelPrefix, key)
 
 		if !isValidLabelKey(labelKey) || !isValidLabelValue(value) {
-			klog.Warning(nil, "Invalid label key or value, skipping", "key", labelKey, "value", value)
+			klog.Warning("Invalid label key or value, skipping", "key", labelKey, "value", value)
 			continue
 		}
 

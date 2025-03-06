@@ -3,19 +3,20 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"slices"
-
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 )
+
+const maxNodesToMeasure = 10
 
 const (
 	// Storage service labels
@@ -29,7 +30,6 @@ const (
 	BandwidthPrefix = "node-capability/bandwidth-to-"
 	LatencyPrefix   = "node-capability/latency-to-"
 
-	// Bandwidth measurement interval
 	BandwidthMeasurementInterval = 6 * time.Hour
 
 	// Edge-cloud labels
@@ -42,7 +42,7 @@ const (
 	ZoneLabel   = "topology.kubernetes.io/zone"
 )
 
-// DataLocalityCollector collects information about storage and networking
+// DataLocalityCollector collects info about storage and networking
 type DataLocalityCollector struct {
 	nodeName              string
 	clientset             kubernetes.Interface
@@ -52,7 +52,7 @@ type DataLocalityCollector struct {
 	lastBandwidthUpdate   time.Time
 	storageCache          map[string]interface{}
 	storageCacheMutex     sync.RWMutex
-	nodeType              string // "edge" or "cloud"
+	nodeType              string // edge/cloud
 	region                string
 	zone                  string
 }
@@ -124,7 +124,7 @@ func (c *DataLocalityCollector) CollectStorageCapabilities(ctx context.Context) 
 		}
 	}
 
-	// Update network measurements periodically
+	// update network measurements periodically
 	if time.Since(c.lastBandwidthUpdate) > BandwidthMeasurementInterval {
 		c.collectNetworkMeasurements(ctx, labels)
 		c.lastBandwidthUpdate = time.Now()
@@ -192,26 +192,33 @@ func (c *DataLocalityCollector) detectAndSetNodeTopology(node *v1.Node, labels m
 
 // detectStorageService checks for storage services like MinIO running on the node
 func (c *DataLocalityCollector) detectStorageService(ctx context.Context) (bool, []string, int64, error) {
-	// For now, we're just using labels and mock data since we're asked to mock MinIO connections
 	fieldSelector := fmt.Sprintf("spec.nodeName=%s", c.nodeName)
 
 	pods, err := c.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
 		FieldSelector: fieldSelector,
-		LabelSelector: "app=minio,app=storage-service",
 	})
 
 	if err != nil {
-		return false, nil, 0, fmt.Errorf("failed to list storage service pods: %w", err)
+		return false, nil, 0, fmt.Errorf("failed to list pods: %w", err)
 	}
 
-	if len(pods.Items) == 0 {
+	// Look for MinIO pods
+	var minioPods []v1.Pod
+	for _, pod := range pods.Items {
+		if strings.Contains(strings.ToLower(pod.Name), "minio") ||
+			(pod.Labels != nil && pod.Labels["app"] == "minio") {
+			minioPods = append(minioPods, pod)
+		}
+	}
+
+	if len(minioPods) == 0 {
 		return false, nil, 0, nil
 	}
 
 	buckets := []string{"eo-scenes", "cog-data", "fmask-results", "data", "models"}
 
 	var storageCapacity int64
-	for _, pod := range pods.Items {
+	for _, pod := range minioPods {
 		for _, volume := range pod.Spec.Volumes {
 			if volume.PersistentVolumeClaim != nil {
 				pvcName := volume.PersistentVolumeClaim.ClaimName
@@ -246,7 +253,6 @@ func (c *DataLocalityCollector) detectLocalStorage(ctx context.Context) (bool, i
 	hasLocalStorage := false
 
 	for _, pv := range pvs.Items {
-		// Check if PV is local to this node
 		if c.isPVAttachedToNode(pv, c.nodeName) {
 			hasLocalStorage = true
 
@@ -261,25 +267,24 @@ func (c *DataLocalityCollector) detectLocalStorage(ctx context.Context) (bool, i
 
 // isPVAttachedToNode checks if a PV is attached to this node
 func (c *DataLocalityCollector) isPVAttachedToNode(pv v1.PersistentVolume, nodeName string) bool {
-	// Check node affinity
 	if pv.Spec.NodeAffinity != nil && pv.Spec.NodeAffinity.Required != nil {
 		for _, term := range pv.Spec.NodeAffinity.Required.NodeSelectorTerms {
 			for _, expr := range term.MatchExpressions {
 				if expr.Key == "kubernetes.io/hostname" && expr.Operator == "In" {
-					if slices.Contains(expr.Values, nodeName) {
-						return true
+					for _, value := range expr.Values {
+						if value == nodeName {
+							return true
+						}
 					}
 				}
 			}
 		}
 	}
 
-	// Check if this is a local volume
 	if pv.Spec.Local != nil {
 		return true
 	}
 
-	// Check annotations for node binding
 	if boundNode, exists := pv.Annotations["volume.kubernetes.io/selected-node"]; exists {
 		return boundNode == nodeName
 	}
@@ -289,14 +294,13 @@ func (c *DataLocalityCollector) isPVAttachedToNode(pv v1.PersistentVolume, nodeN
 
 // detectStorageTechnology determines the type of storage (SSD, HDD, etc.)
 func (c *DataLocalityCollector) detectStorageTechnology() (string, error) {
-	// Check for NVMe drives
 	cmd := exec.Command("ls", "/dev/nvme*")
 	output, err := cmd.CombinedOutput()
 	if err == nil && len(output) > 0 {
 		return "nvme", nil
 	}
 
-	// Check for rotational status of primary disk
+	// rotational status of primary disk
 	cmd = exec.Command("lsblk", "-d", "-n", "-o", "NAME,ROTA")
 	output, err = cmd.CombinedOutput()
 	if err == nil {
@@ -304,7 +308,7 @@ func (c *DataLocalityCollector) detectStorageTechnology() (string, error) {
 		for _, line := range lines {
 			fields := strings.Fields(line)
 			if len(fields) >= 2 && !strings.HasPrefix(fields[0], "loop") {
-				// ROTA=0 means non-rotational (SSD), ROTA=1 means rotational (HDD)
+				// ROTA=0 = non-rotational (SSD), ROTA=1 = rotational (HDD)
 				if fields[1] == "0" {
 					return "ssd", nil
 				} else if fields[1] == "1" {
@@ -320,9 +324,9 @@ func (c *DataLocalityCollector) detectStorageTechnology() (string, error) {
 	if err == nil {
 		source := strings.TrimSpace(string(output))
 		if strings.HasPrefix(source, "/dev/") {
-			// Extract device name
+
 			device := strings.TrimPrefix(source, "/dev/")
-			device = strings.Split(device, "p")[0] // Remove partition number
+			device = strings.Split(device, "p")[0] // removing partition number
 			device = strings.TrimRight(device, "0123456789")
 
 			// Check rotational status
@@ -346,14 +350,12 @@ func (c *DataLocalityCollector) detectStorageTechnology() (string, error) {
 func (c *DataLocalityCollector) collectNetworkMeasurements(ctx context.Context, labels map[string]string) {
 	klog.Infof("Starting network measurements for node %s", c.nodeName)
 
-	// Get list of all nodes
 	nodes, err := c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		klog.Warningf("Failed to list nodes for bandwidth measurement: %v", err)
 		return
 	}
 
-	// Local bandwidth is always high
 	labels[BandwidthPrefix+"local"] = "1000000000" // 1 GB/s
 	labels[LatencyPrefix+"local"] = "0.1"          // 0.1ms
 
@@ -367,14 +369,13 @@ func (c *DataLocalityCollector) collectNetworkMeasurements(ctx context.Context, 
 
 	for _, node := range nodes.Items {
 		if node.Name == c.nodeName {
-			continue // Skip self
+			continue
 		}
 
 		if !isNodeReady(&node) {
-			continue // Skip unready nodes
+			continue
 		}
 
-		// Categorize by zone/region proximity
 		if c.zone != "" && node.Labels[ZoneLabel] == c.zone {
 			sameZoneNodes = append(sameZoneNodes, node)
 		} else if c.region != "" && node.Labels[RegionLabel] == c.region {
@@ -384,20 +385,17 @@ func (c *DataLocalityCollector) collectNetworkMeasurements(ctx context.Context, 
 		}
 	}
 
-	// Prioritize measurement order: same zone, same region, others
-	// (with limits to avoid excessive measurements)
+	// measurement order: same zone -> same region -> others
 	nodesToMeasure := append(sameZoneNodes, sameRegionNodes...)
 	nodesToMeasure = append(nodesToMeasure, otherNodes...)
 
-	// Limit to 10 nodes to avoid excess measurements
-	maxNodesToMeasure := 10
+	maxNodesToMeasure := maxNodesToMeasure
 	if len(nodesToMeasure) > maxNodesToMeasure {
 		nodesToMeasure = nodesToMeasure[:maxNodesToMeasure]
 	}
 
 	measuredCount := 0
 	for _, node := range nodesToMeasure {
-		// Get node IP
 		var nodeIP string
 		for _, address := range node.Status.Addresses {
 			if address.Type == v1.NodeInternalIP {
@@ -411,15 +409,8 @@ func (c *DataLocalityCollector) collectNetworkMeasurements(ctx context.Context, 
 			continue
 		}
 
-		// Measure bandwidth and latency
-		bandwidth, latency, err := c.measureBandwidth(nodeIP)
-		if err != nil {
-			klog.Warningf("Failed to measure bandwidth to node %s (%s): %v", node.Name, nodeIP, err)
-			// Use topology-based estimation instead
-			bandwidth, latency = c.estimateBandwidthFromTopology(node)
-		}
+		bandwidth, latency := c.mockBandwidthMeasurement(node)
 
-		// Store results
 		labels[BandwidthPrefix+node.Name] = strconv.FormatInt(bandwidth, 10)
 		labels[LatencyPrefix+node.Name] = strconv.FormatFloat(latency, 'f', 2, 64)
 
@@ -435,85 +426,8 @@ func (c *DataLocalityCollector) collectNetworkMeasurements(ctx context.Context, 
 	klog.Infof("Network measurements complete for node %s: measured %d nodes", c.nodeName, measuredCount)
 }
 
-// measureBandwidth measures network performance between nodes
-func (c *DataLocalityCollector) measureBandwidth(targetIP string) (int64, float64, error) {
-	if targetIP == "" {
-		return 0, 0, fmt.Errorf("empty target IP")
-	}
-
-	// First get ping latency as it's more reliable
-	pingLatency, err := c.measurePingLatency(targetIP)
-	if err != nil {
-		return 0, 0, fmt.Errorf("ping failed: %w", err)
-	}
-
-	// Based on latency, estimate bandwidth using a simple model
-	var bandwidth int64
-
-	switch {
-	case pingLatency < 1.0:
-		bandwidth = 1000000000 // 1 GB/s for very low latency (local network)
-	case pingLatency < 5.0:
-		bandwidth = 500000000 // 500 MB/s for low latency (same datacenter)
-	case pingLatency < 20.0:
-		bandwidth = 200000000 // 200 MB/s for medium latency (same region)
-	case pingLatency < 50.0:
-		bandwidth = 100000000 // 100 MB/s for higher latency (regional)
-	case pingLatency < 100.0:
-		bandwidth = 50000000 // 50 MB/s for high latency (cross-region)
-	default:
-		bandwidth = 10000000 // 10 MB/s for very high latency (cross-continent)
-	}
-
-	// Adjust bandwidth for edge nodes
-	if c.nodeType == EdgeNodeValue {
-		bandwidth = int64(float64(bandwidth) * 0.7) // 30% reduction for edge nodes
-	}
-
-	return bandwidth, pingLatency, nil
-}
-
-// measurePingLatency measures round-trip time to target
-func (c *DataLocalityCollector) measurePingLatency(targetIP string) (float64, error) {
-	// Execute ping command
-	cmd := exec.Command("ping", "-c", "3", "-W", "1", targetIP)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return 0, fmt.Errorf("ping failed: %w", err)
-	}
-
-	// Parse ping output
-	outputStr := string(output)
-
-	// Look for the average round-trip time
-	rttIndex := strings.Index(outputStr, "min/avg/max")
-	if rttIndex == -1 {
-		return 0, fmt.Errorf("couldn't parse ping output")
-	}
-
-	avgStart := strings.Index(outputStr[rttIndex:], "=") + rttIndex + 1
-	if avgStart == -1 {
-		return 0, fmt.Errorf("couldn't find average ping time")
-	}
-
-	parts := strings.Split(outputStr[avgStart:], "/")
-	if len(parts) < 2 {
-		return 0, fmt.Errorf("unexpected ping output format")
-	}
-
-	// Second part is the average
-	avgStr := strings.TrimSpace(parts[1])
-	avg, err := strconv.ParseFloat(avgStr, 64)
-	if err != nil {
-		return 0, fmt.Errorf("failed to parse average ping time: %w", err)
-	}
-
-	return avg, nil
-}
-
-// estimateBandwidthFromTopology estimates bandwidth based on node topology
-func (c *DataLocalityCollector) estimateBandwidthFromTopology(node v1.Node) (int64, float64) {
-	// Get node type
+// mockBandwidthMeasurement creates realistic bandwidth/latency measurements based on topology
+func (c *DataLocalityCollector) mockBandwidthMeasurement(node v1.Node) (int64, float64) {
 	targetType := CloudNodeValue
 	if value, exists := node.Labels[EdgeNodeLabel]; exists && value == EdgeNodeValue {
 		targetType = EdgeNodeValue
@@ -521,57 +435,56 @@ func (c *DataLocalityCollector) estimateBandwidthFromTopology(node v1.Node) (int
 		targetType = EdgeNodeValue
 	}
 
-	// Get region and zone
 	targetRegion := node.Labels[RegionLabel]
 	targetZone := node.Labels[ZoneLabel]
 
-	// Default values
 	var bandwidth int64
 	var latency float64
 
-	// Estimate based on topology relationship
+	jitter := 0.85 + (rand.Float64() * 0.3)
+
+	// Estimations based on topology relationship
 	if c.zone != "" && c.zone == targetZone {
 		// Same zone
 		if c.nodeType == EdgeNodeValue && targetType == EdgeNodeValue {
-			bandwidth = 500000000 // 500 MB/s for edge-to-edge in same zone
-			latency = 1.0         // 1ms latency
+			bandwidth = int64(float64(500000000) * jitter) // 500 MB/s edge-edge
+			latency = 1.0 / jitter                         // 1ms
 		} else if c.nodeType == CloudNodeValue && targetType == CloudNodeValue {
-			bandwidth = 1000000000 // 1 GB/s for cloud-to-cloud in same zone
-			latency = 0.5          // 0.5ms latency
+			bandwidth = int64(float64(1000000000) * jitter) // 1 GB/s cloud-cloud
+			latency = 0.5 / jitter                          // 0.5ms
 		} else {
-			bandwidth = 750000000 // 750 MB/s for edge-to-cloud in same zone
-			latency = 1.0         // 1ms latency
+			bandwidth = int64(float64(750000000) * jitter) // 750 MB/s edge-cloud
+			latency = 1.0 / jitter                         // 1ms
 		}
 	} else if c.region != "" && c.region == targetRegion {
 		// Same region, different zone
 		if c.nodeType == EdgeNodeValue && targetType == EdgeNodeValue {
-			bandwidth = 200000000 // 200 MB/s for edge-to-edge in same region
-			latency = 5.0         // 5ms latency
+			bandwidth = int64(float64(200000000) * jitter) // 200 MB/s edge-edge
+			latency = 5.0 / jitter                         // 5ms
 		} else if c.nodeType == CloudNodeValue && targetType == CloudNodeValue {
-			bandwidth = 500000000 // 500 MB/s for cloud-to-cloud in same region
-			latency = 2.0         // 2ms latency
+			bandwidth = int64(float64(500000000) * jitter) // 500 MB/s  cloud-cloud
+			latency = 2.0 / jitter                         // 2ms
 		} else {
-			bandwidth = 100000000 // 100 MB/s for edge-to-cloud in same region
-			latency = 10.0        // 10ms latency
+			bandwidth = int64(float64(100000000) * jitter) // 100 MB/s edge-cloud
+			latency = 10.0 / jitter                        // 10ms
 		}
 	} else {
 		// Different regions
 		if c.nodeType == EdgeNodeValue && targetType == EdgeNodeValue {
-			bandwidth = 50000000 // 50 MB/s edge-to-edge
-			latency = 50.0       // 50ms
+			bandwidth = int64(float64(50000000) * jitter) // 50 MB/s edge-edge
+			latency = 50.0 / jitter                       // 50ms
 		} else if c.nodeType == CloudNodeValue && targetType == CloudNodeValue {
-			bandwidth = 100000000 // 100 MB/s cloud-to-cloud
-			latency = 20.0        // 20ms latency
+			bandwidth = int64(float64(100000000) * jitter) // 100 MB/s cloud-cloud
+			latency = 20.0 / jitter                        // 20ms
 		} else {
-			bandwidth = 20000000 // 20 MB/s  edge-to-cloud
-			latency = 100.0      // 100ms latency
+			bandwidth = int64(float64(20000000) * jitter) // 20 MB/s  edge-cloud
+			latency = 100.0 / jitter                      // 100ms
 		}
 	}
 
 	return bandwidth, latency
 }
 
-// isNodeReady checks if a node is in the Ready condition
 func isNodeReady(node *v1.Node) bool {
 	for _, condition := range node.Status.Conditions {
 		if condition.Type == v1.NodeReady && condition.Status == v1.ConditionTrue {
