@@ -20,8 +20,8 @@ import (
 )
 
 var (
-	version   = "1.2.0"
-	buildTime = "2025-03-04"
+	version   = "0.0.3"
+	buildTime = "2025-03-06"
 )
 
 func main() {
@@ -265,7 +265,7 @@ func updateNodeLabels(ctx context.Context, clientset kubernetes.Interface, nodeN
 func startHealthServer(port int, collector *daemon.NodeCapabilityCollector) {
 	mux := http.NewServeMux()
 
-	// Basic health check endpoint
+	// Basic Health check endpoint
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
