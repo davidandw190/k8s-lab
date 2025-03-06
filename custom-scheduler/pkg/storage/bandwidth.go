@@ -19,23 +19,22 @@ type BandwidthGraph struct {
 	nodeZones   map[string]string
 	nodeTypes   map[string]StorageNodeType
 	// default settings
-	localBandwidth       float64 // bytes/sec
-	localLatency         float64 // ms
-	sameZoneBandwidth    float64 // bytes/sec
-	sameZoneLatency      float64 // ms
-	sameRegionBandwidth  float64 // bytes/sec
-	sameRegionLatency    float64 // ms
-	crossRegionBandwidth float64 // bytes/sec
-	crossRegionLatency   float64 // ms
-	edgeCloudBandwidth   float64 // bytes/sec
-	edgeCloudLatency     float64 // ms
-	defaultBandwidth     float64 // bytes/sec
-	defaultLatency       float64 // ms
+	localBandwidth       float64
+	localLatency         float64
+	sameZoneBandwidth    float64
+	sameZoneLatency      float64
+	sameRegionBandwidth  float64
+	sameRegionLatency    float64
+	crossRegionBandwidth float64
+	crossRegionLatency   float64
+	edgeCloudBandwidth   float64
+	edgeCloudLatency     float64
+	defaultBandwidth     float64
+	defaultLatency       float64
 	mu                   sync.RWMutex
 	lastUpdated          time.Time
 }
 
-// NewBandwidthGraph creates a new bandwidth graph
 func NewBandwidthGraph(defaultBandwidth float64) *BandwidthGraph {
 	return &BandwidthGraph{
 		pathMap:              make(map[string]map[string]*NetworkPath),
@@ -58,7 +57,6 @@ func NewBandwidthGraph(defaultBandwidth float64) *BandwidthGraph {
 	}
 }
 
-// SetNodeTopology adds topology information for a node
 func (bg *BandwidthGraph) SetNodeTopology(nodeName, region, zone string, nodeType StorageNodeType) {
 	bg.mu.Lock()
 	defer bg.mu.Unlock()
@@ -152,7 +150,6 @@ func (bg *BandwidthGraph) GetNetworkPath(source, dest string) *NetworkPath {
 	return bg.estimateFromTopology(source, dest)
 }
 
-// estimateFromTopology estimates bandwidth based on node topology
 func (bg *BandwidthGraph) estimateFromTopology(source, dest string) *NetworkPath {
 	// check zone relationship
 	sourceZone := bg.nodeZones[source]
@@ -257,7 +254,6 @@ func (bg *BandwidthGraph) EstimateTransferTime(source, dest string, sizeBytes in
 	return transferTime
 }
 
-// RemoveNode removes a node from the bandwidth graph
 func (bg *BandwidthGraph) RemoveNode(nodeName string) {
 	bg.mu.Lock()
 	defer bg.mu.Unlock()

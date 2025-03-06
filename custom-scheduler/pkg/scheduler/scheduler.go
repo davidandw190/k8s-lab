@@ -512,7 +512,6 @@ func (s *Scheduler) createPodInformer(_ context.Context) cache.Controller {
 	return informer
 }
 
-// enqueuePod adds a pod to the scheduling queue
 func (s *Scheduler) enqueuePod(pod *v1.Pod) {
 	// we skip pods that already have a node or use a different scheduler
 	if pod.Spec.NodeName != "" || pod.Spec.SchedulerName != s.schedulerName {
@@ -527,7 +526,6 @@ func (s *Scheduler) enqueuePod(pod *v1.Pod) {
 	s.podQueue <- pod
 }
 
-// scheduleOne schedules a single pod
 func (s *Scheduler) scheduleOne(ctx context.Context) {
 	var pod *v1.Pod
 	select {
@@ -558,7 +556,6 @@ func (s *Scheduler) scheduleOne(ctx context.Context) {
 		pod.Namespace, pod.Name, nodeName)
 }
 
-// findBestNodeForPod finds the best node for a pod
 func (s *Scheduler) findBestNodeForPod(ctx context.Context, pod *v1.Pod) (string, error) {
 	nodes, err := s.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -597,7 +594,6 @@ func (s *Scheduler) findBestNodeForPod(ctx context.Context, pod *v1.Pod) (string
 	return nodeScores[0].Name, nil
 }
 
-// filterNodes applies predicates to filter out unsuitable nodes
 func (s *Scheduler) filterNodes(ctx context.Context, pod *v1.Pod, nodes []v1.Node) ([]v1.Node, error) {
 	var filteredNodes []v1.Node
 
@@ -633,7 +629,6 @@ func (s *Scheduler) filterNodes(ctx context.Context, pod *v1.Pod, nodes []v1.Nod
 	return filteredNodes, nil
 }
 
-// prioritizeNodes scores nodes based on multiple priority functions
 func (s *Scheduler) prioritizeNodes(pod *v1.Pod, nodes []v1.Node) ([]NodeScore, error) {
 	var allScores [][]NodeScore
 
@@ -655,7 +650,7 @@ func (s *Scheduler) prioritizeNodes(pod *v1.Pod, nodes []v1.Node) ([]NodeScore, 
 			if err != nil {
 				klog.Warningf("Error calculating data locality score for pod %s/%s on node %s: %v",
 					pod.Namespace, pod.Name, node.Name, err)
-				score = 50 // Default score
+				score = 50
 			}
 
 			dataLocalityScores = append(dataLocalityScores, NodeScore{
@@ -671,7 +666,6 @@ func (s *Scheduler) prioritizeNodes(pod *v1.Pod, nodes []v1.Node) ([]NodeScore, 
 	return s.combineScores(pod, nodes, allScores), nil
 }
 
-// combineScores combines scores from different priority functions
 func (s *Scheduler) combineScores(pod *v1.Pod, nodes []v1.Node, scoresList [][]NodeScore) []NodeScore {
 	weights := s.getWeightsForPod(pod)
 
@@ -702,7 +696,6 @@ func (s *Scheduler) combineScores(pod *v1.Pod, nodes []v1.Node, scoresList [][]N
 	return normalizeScores(result)
 }
 
-// getWeightsForPod returns priority weights based on pod characteristics
 func (s *Scheduler) getWeightsForPod(pod *v1.Pod) []float64 {
 	weights := []float64{
 		0.3, // Resource priority
@@ -781,7 +774,6 @@ func (s *Scheduler) scoreResourcePriority(pod *v1.Pod, nodes []v1.Node) ([]NodeS
 	return scores, nil
 }
 
-// calculateResourceScore computes a resource-based score for a node
 func (s *Scheduler) calculateResourceScore(pod *v1.Pod, node *v1.Node) int {
 	if computeScoreStr, exists := node.Labels["node-capability/compute-score"]; exists {
 		if computeScore, err := strconv.Atoi(computeScoreStr); err == nil {
@@ -835,7 +827,6 @@ func (s *Scheduler) calculateResourceScore(pod *v1.Pod, node *v1.Node) int {
 	return score
 }
 
-// scoreNodeAffinity scores nodes based on node affinity preferences
 func (s *Scheduler) scoreNodeAffinity(pod *v1.Pod, nodes []v1.Node) ([]NodeScore, error) {
 	var scores []NodeScore
 
@@ -893,11 +884,11 @@ func (s *Scheduler) nodeSelectorMatches(node *v1.Node, selector *v1.NodeSelector
 				return false
 			}
 		case v1.NodeSelectorOpExists:
-			if !nodeHasKey(node, expr.Key) {
+			if !nodeHasLabelKey(node, expr.Key) {
 				return false
 			}
 		case v1.NodeSelectorOpDoesNotExist:
-			if nodeHasKey(node, expr.Key) {
+			if nodeHasLabelKey(node, expr.Key) {
 				return false
 			}
 		case v1.NodeSelectorOpGt, v1.NodeSelectorOpLt:
@@ -910,7 +901,6 @@ func (s *Scheduler) nodeSelectorMatches(node *v1.Node, selector *v1.NodeSelector
 	return true
 }
 
-// scoreNodeType scores nodes based on preference for edge or cloud
 func (s *Scheduler) scoreNodeType(pod *v1.Pod, nodes []v1.Node) ([]NodeScore, error) {
 	var scores []NodeScore
 
@@ -946,7 +936,6 @@ func (s *Scheduler) scoreNodeType(pod *v1.Pod, nodes []v1.Node) ([]NodeScore, er
 	return scores, nil
 }
 
-// scoreNodeCapabilities scores nodes based on their capabilities
 func (s *Scheduler) scoreNodeCapabilities(pod *v1.Pod, nodes []v1.Node) ([]NodeScore, error) {
 	var scores []NodeScore
 
@@ -988,7 +977,6 @@ func (s *Scheduler) scoreNodeCapabilities(pod *v1.Pod, nodes []v1.Node) ([]NodeS
 	return scores, nil
 }
 
-// nodeFitsResources checks if node has enough resources for the pod
 func (s *Scheduler) nodeFitsResources(ctx context.Context, pod *v1.Pod, node *v1.Node) bool {
 	var requestedCPU, requestedMemory int64
 
@@ -1044,7 +1032,6 @@ func (s *Scheduler) nodeFitsResources(ctx context.Context, pod *v1.Pod, node *v1
 		(usedMemory+requestedMemory <= allocatableMemory)
 }
 
-// nodeHasRequiredCapabilities checks if a node has required capabilities
 func (s *Scheduler) nodeHasRequiredCapabilities(pod *v1.Pod, node *v1.Node) bool {
 	if pod.Annotations == nil {
 		return true
@@ -1072,7 +1059,6 @@ func (s *Scheduler) nodeHasRequiredCapabilities(pod *v1.Pod, node *v1.Node) bool
 	return true
 }
 
-// satisfiesNodeAffinity checks if node satisfies pod's node affinity
 func (s *Scheduler) satisfiesNodeAffinity(pod *v1.Pod, node *v1.Node) bool {
 	if pod.Spec.Affinity == nil || pod.Spec.Affinity.NodeAffinity == nil {
 		return true
@@ -1094,7 +1080,6 @@ func (s *Scheduler) satisfiesNodeAffinity(pod *v1.Pod, node *v1.Node) bool {
 	return true
 }
 
-// toleratesNodeTaints checks if pod tolerates node taints
 func (s *Scheduler) toleratesNodeTaints(pod *v1.Pod, node *v1.Node) bool {
 	if len(node.Spec.Taints) == 0 {
 		return true
@@ -1112,7 +1097,6 @@ func (s *Scheduler) toleratesNodeTaints(pod *v1.Pod, node *v1.Node) bool {
 	return true
 }
 
-// bindPod binds a pod to a node
 func (s *Scheduler) bindPod(ctx context.Context, pod *v1.Pod, nodeName string) error {
 	klog.Infof("Binding pod %s/%s to node %s", pod.Namespace, pod.Name, nodeName)
 
@@ -1131,7 +1115,6 @@ func (s *Scheduler) bindPod(ctx context.Context, pod *v1.Pod, nodeName string) e
 	return s.clientset.CoreV1().Pods(pod.Namespace).Bind(ctx, binding, metav1.CreateOptions{})
 }
 
-// startHealthCheckServer starts a HTTP server for health checks
 func (s *Scheduler) startHealthCheckServer(ctx context.Context) {
 	mux := http.NewServeMux()
 
@@ -1200,7 +1183,6 @@ func (s *Scheduler) startHealthCheckServer(ctx context.Context) {
 	}()
 }
 
-// isNodeReady checks if a node is in Ready condition
 func isNodeReady(node *v1.Node) bool {
 	for _, condition := range node.Status.Conditions {
 		if condition.Type == v1.NodeReady && condition.Status == v1.ConditionTrue {
@@ -1210,7 +1192,6 @@ func isNodeReady(node *v1.Node) bool {
 	return false
 }
 
-// isEdgeNode determines if a node is an edge node
 func isEdgeNode(node *v1.Node) bool {
 	// node label
 	if value, ok := node.Labels[EdgeNodeLabel]; ok && value == EdgeNodeValue {
@@ -1225,7 +1206,6 @@ func isEdgeNode(node *v1.Node) bool {
 	return false
 }
 
-// hasGPUCapability checks if a node has GPU capabilities
 func hasGPUCapability(node *v1.Node) bool {
 	for k, v := range node.Labels {
 		if (strings.Contains(k, "gpu") || strings.Contains(k, "accelerator")) && v == "true" {
@@ -1236,7 +1216,6 @@ func hasGPUCapability(node *v1.Node) bool {
 	return false
 }
 
-// hasFastStorage checks if a node has fast storage capabilities
 func hasFastStorage(node *v1.Node) bool {
 	// fast storage labels
 	if tech, ok := node.Labels["node-capability/storage-technology"]; ok {
@@ -1253,7 +1232,6 @@ func hasFastStorage(node *v1.Node) bool {
 	return false
 }
 
-// podNeedsGPU checks if a pod requires GPU capabilities
 func podNeedsGPU(pod *v1.Pod) bool {
 	if pod.Annotations != nil {
 		if _, ok := pod.Annotations["scheduler.thesis/requires-gpu"]; ok {
@@ -1261,7 +1239,6 @@ func podNeedsGPU(pod *v1.Pod) bool {
 		}
 	}
 
-	// Check for GPU resource requests
 	for _, container := range pod.Spec.Containers {
 		if container.Resources.Requests != nil {
 			for resourceName := range container.Resources.Requests {
@@ -1276,7 +1253,6 @@ func podNeedsGPU(pod *v1.Pod) bool {
 	return false
 }
 
-// podNeedsFastStorage checks if a pod benefits from fast storage
 func podNeedsFastStorage(pod *v1.Pod) bool {
 	if pod.Annotations != nil {
 		if _, ok := pod.Annotations["scheduler.thesis/requires-fast-storage"]; ok {
@@ -1287,13 +1263,11 @@ func podNeedsFastStorage(pod *v1.Pod) bool {
 	return false
 }
 
-// nodeHasKey checks if a node has a specific label key
-func nodeHasKey(node *v1.Node, key string) bool {
+func nodeHasLabelKey(node *v1.Node, key string) bool {
 	_, exists := node.Labels[key]
 	return exists
 }
 
-// nodeHasValueForKey checks if a node has one of the specified values for a key
 func nodeHasValueForKey(node *v1.Node, key string, values []string) bool {
 	if value, exists := node.Labels[key]; exists {
 		for _, v := range values {
@@ -1305,7 +1279,6 @@ func nodeHasValueForKey(node *v1.Node, key string, values []string) bool {
 	return false
 }
 
-// nodeMatchesNumericComparison checks if a node's label matches numeric comparison
 func nodeMatchesNumericComparison(node *v1.Node, key string, op v1.NodeSelectorOperator, values []string) bool {
 	if val, exists := node.Labels[key]; exists && len(values) > 0 {
 		nodeVal, err1 := strconv.Atoi(val)
@@ -1322,7 +1295,6 @@ func nodeMatchesNumericComparison(node *v1.Node, key string, op v1.NodeSelectorO
 	return false
 }
 
-// extractPodCapabilityRequirements extracts capability requirements from pod
 func extractPodCapabilityRequirements(pod *v1.Pod) map[string]string {
 	capabilities := make(map[string]string)
 
@@ -1346,7 +1318,6 @@ func extractPodCapabilityRequirements(pod *v1.Pod) map[string]string {
 	return capabilities
 }
 
-// tolerationsTolerateTaint checks if tolerations tolerate the taint
 func tolerationsTolerateTaint(tolerations []v1.Toleration, taint *v1.Taint) bool {
 	for _, toleration := range tolerations {
 		if toleration.Effect == taint.Effect &&
@@ -1358,7 +1329,6 @@ func tolerationsTolerateTaint(tolerations []v1.Toleration, taint *v1.Taint) bool
 	return false
 }
 
-// containsString checks if a string exists in a slice
 func containsString(slice []string, str string) bool {
 	for _, item := range slice {
 		if item == str {

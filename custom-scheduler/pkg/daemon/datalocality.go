@@ -57,7 +57,6 @@ type DataLocalityCollector struct {
 	zone                  string
 }
 
-// NewDataLocalityCollector creates a new data locality collector
 func NewDataLocalityCollector(nodeName string, clientset kubernetes.Interface) *DataLocalityCollector {
 	return &DataLocalityCollector{
 		nodeName:              nodeName,
@@ -65,11 +64,10 @@ func NewDataLocalityCollector(nodeName string, clientset kubernetes.Interface) *
 		bandwidthCache:        make(map[string]int64),
 		bandwidthLatencyCache: make(map[string]float64),
 		storageCache:          make(map[string]interface{}),
-		lastBandwidthUpdate:   time.Now().Add(-BandwidthMeasurementInterval), // Force immediate update
+		lastBandwidthUpdate:   time.Now().Add(-BandwidthMeasurementInterval), // we force immediate update
 	}
 }
 
-// CollectStorageCapabilities detects storage services and capabilities
 func (c *DataLocalityCollector) CollectStorageCapabilities(ctx context.Context) (map[string]string, error) {
 	labels := make(map[string]string)
 
@@ -202,7 +200,6 @@ func (c *DataLocalityCollector) detectStorageService(ctx context.Context) (bool,
 		return false, nil, 0, fmt.Errorf("failed to list pods: %w", err)
 	}
 
-	// Look for MinIO pods
 	var minioPods []v1.Pod
 	for _, pod := range pods.Items {
 		if strings.Contains(strings.ToLower(pod.Name), "minio") ||
@@ -240,9 +237,7 @@ func (c *DataLocalityCollector) detectStorageService(ctx context.Context) (bool,
 	return true, buckets, storageCapacity, nil
 }
 
-// detectLocalStorage checks for local storage capabilities
 func (c *DataLocalityCollector) detectLocalStorage(ctx context.Context) (bool, int64) {
-	// Check for local PVs attached to this node
 	pvs, err := c.clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		klog.Warningf("Failed to list PersistentVolumes: %v", err)
@@ -265,7 +260,6 @@ func (c *DataLocalityCollector) detectLocalStorage(ctx context.Context) (bool, i
 	return hasLocalStorage, totalCapacity
 }
 
-// isPVAttachedToNode checks if a PV is attached to this node
 func (c *DataLocalityCollector) isPVAttachedToNode(pv v1.PersistentVolume, nodeName string) bool {
 	if pv.Spec.NodeAffinity != nil && pv.Spec.NodeAffinity.Required != nil {
 		for _, term := range pv.Spec.NodeAffinity.Required.NodeSelectorTerms {
@@ -318,7 +312,7 @@ func (c *DataLocalityCollector) detectStorageTechnology() (string, error) {
 		}
 	}
 
-	// Check if the root partition is mounted on SSD or HDD
+	// we have to check if the root partition is mounted on SSD or HDD
 	cmd = exec.Command("findmnt", "-n", "-o", "SOURCE", "/")
 	output, err = cmd.CombinedOutput()
 	if err == nil {
@@ -364,7 +358,7 @@ func (c *DataLocalityCollector) collectNetworkMeasurements(ctx context.Context, 
 	c.bandwidthLatencyCache = make(map[string]float64)
 	c.bandwidthCacheMutex.Unlock()
 
-	// Group nodes by zone and region to prioritize measurements
+	// we can group nodes by zone and region to prioritize measurements
 	var sameZoneNodes, sameRegionNodes, otherNodes []v1.Node
 
 	for _, node := range nodes.Items {
@@ -426,7 +420,7 @@ func (c *DataLocalityCollector) collectNetworkMeasurements(ctx context.Context, 
 	klog.Infof("Network measurements complete for node %s: measured %d nodes", c.nodeName, measuredCount)
 }
 
-// mockBandwidthMeasurement creates realistic bandwidth/latency measurements based on topology
+// TEMP: mockBandwidthMeasurement creates realistic bandwidth/latency measurements based on topology
 func (c *DataLocalityCollector) mockBandwidthMeasurement(node v1.Node) (int64, float64) {
 	targetType := CloudNodeValue
 	if value, exists := node.Labels[EdgeNodeLabel]; exists && value == EdgeNodeValue {
@@ -443,7 +437,7 @@ func (c *DataLocalityCollector) mockBandwidthMeasurement(node v1.Node) (int64, f
 
 	jitter := 0.85 + (rand.Float64() * 0.3)
 
-	// Estimations based on topology relationship
+	// all these are estimations based on topology relationship
 	if c.zone != "" && c.zone == targetZone {
 		// Same zone
 		if c.nodeType == EdgeNodeValue && targetType == EdgeNodeValue {

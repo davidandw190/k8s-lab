@@ -22,7 +22,6 @@ const (
 	DefaultScore = 50
 )
 
-// NodeCapabilityCollector collects node capabilities and updates labels
 type NodeCapabilityCollector struct {
 	nodeName      string
 	clientset     kubernetes.Interface
@@ -31,7 +30,6 @@ type NodeCapabilityCollector struct {
 	lastCollected time.Time
 }
 
-// NewNodeCapabilityCollector creates a new capability collector
 func NewNodeCapabilityCollector(nodeName string, clientset kubernetes.Interface) *NodeCapabilityCollector {
 	return &NodeCapabilityCollector{
 		nodeName:     nodeName,
@@ -41,7 +39,6 @@ func NewNodeCapabilityCollector(nodeName string, clientset kubernetes.Interface)
 	}
 }
 
-// CollectAndUpdateCapabilities collects node capabilities and updates node labels
 func (c *NodeCapabilityCollector) CollectAndUpdateCapabilities(ctx context.Context) error {
 	klog.InfoS("Collecting node capabilities", "node", c.nodeName)
 
@@ -91,13 +88,13 @@ func (c *NodeCapabilityCollector) collectPlatformInfo() {
 	osType := "unknown"
 	osDistro := "unknown"
 
-	// Try to detect Linux distribution
+	// linux distribution
 	if output, err := c.executeCommand("uname", "-s"); err == nil {
 		osType = strings.TrimSpace(string(output))
 		c.capabilities["os-type"] = sanitizeValue(osType)
 	}
 
-	// Check for specific distributions
+	// checks for distributions
 	if _, err := c.executeCommand("test", "-f", "/etc/os-release"); err == nil {
 		if output, err := c.executeCommand("cat", "/etc/os-release"); err == nil {
 			lines := strings.Split(string(output), "\n")
@@ -124,9 +121,8 @@ func (c *NodeCapabilityCollector) collectPlatformInfo() {
 	}
 }
 
-// collectComputeCapabilities collects CPU-related capabilities with fallbacks
 func (c *NodeCapabilityCollector) collectComputeCapabilities() error {
-	var cpuCores int = 1 // Default to minimum
+	var cpuCores int = 1
 	var cpuThreads int = 1
 	var cpuModel string = "unknown"
 	var cpuScore int = DefaultScore
@@ -234,7 +230,6 @@ func (c *NodeCapabilityCollector) collectComputeCapabilities() error {
 	return nil
 }
 
-// checkCpuFlag checks if a CPU flag is present
 func (c *NodeCapabilityCollector) checkCpuFlag(flag string) bool {
 	if output, err := c.executeCommand("grep", flag, "/proc/cpuinfo"); err == nil {
 		return strings.Contains(strings.ToLower(string(output)), flag)
@@ -242,7 +237,6 @@ func (c *NodeCapabilityCollector) checkCpuFlag(flag string) bool {
 	return false
 }
 
-// calculateCpuScore determines a score based on CPU capabilities
 func calculateCpuScore(cores, threads int) int {
 	var score int
 	switch {
@@ -272,7 +266,6 @@ func calculateCpuScore(cores, threads int) int {
 	return score
 }
 
-// collectMemoryCapabilities collects memory-related capabilities
 func (c *NodeCapabilityCollector) collectMemoryCapabilities() error {
 	var memTotal int64 = 0
 	var memScore int = DefaultScore
@@ -410,7 +403,6 @@ func calculateMemoryScore(memGB int) int {
 	return score
 }
 
-// collectStorageCapabilities collects storage-related capabilities
 func (c *NodeCapabilityCollector) collectStorageCapabilities() error {
 	var storageType string = "unknown"
 	var storageScore int = DefaultScore
@@ -525,7 +517,6 @@ func (c *NodeCapabilityCollector) collectStorageCapabilities() error {
 		}
 	}
 
-	// Store collected information
 	c.capabilities["storage-type"] = storageType
 	c.capabilities["storage-score"] = strconv.Itoa(storageScore)
 	c.capabilities["storage-iops"] = strconv.Itoa(iopsScore)
@@ -549,7 +540,6 @@ func (c *NodeCapabilityCollector) collectStorageCapabilities() error {
 	return nil
 }
 
-// collectNetworkCapabilities collects network interface capabilities
 func (c *NodeCapabilityCollector) collectNetworkCapabilities() error {
 	var networkScore int = DefaultScore
 	var interfaceSpeed int64 = 0
@@ -584,17 +574,16 @@ func (c *NodeCapabilityCollector) collectNetworkCapabilities() error {
 		}
 	}
 
-	// Calculate network score based on speed
 	if interfaceSpeed > 0 {
 		networkScore = calculateNetworkScore(interfaceSpeed)
 	} else {
 		for _, iface := range networkInterfaces {
 			if strings.HasPrefix(iface, "en") || strings.HasPrefix(iface, "eth") {
-				// Ethernet interface - decent score
+				// Ethernet interface
 				networkScore = 60
 				break
 			} else if strings.HasPrefix(iface, "wl") {
-				// Wireless interface - lower score
+				// Wifi interface
 				networkScore = 40
 				break
 			}
@@ -622,18 +611,17 @@ func (c *NodeCapabilityCollector) collectNetworkCapabilities() error {
 	return nil
 }
 
-// calculateNetworkScore determines a score based on network speed
 func calculateNetworkScore(speedMbps int64) int {
 	var score int
 	switch {
 	case speedMbps >= 10000:
-		score = 95 // 10 Gbps or higher
+		score = 95
 	case speedMbps >= 1000:
-		score = 80 // 1 Gbps
+		score = 80
 	case speedMbps >= 100:
-		score = 50 // 100 Mbps
+		score = 50
 	default:
-		score = 30 // Less than 100 Mbps
+		score = 30
 	}
 
 	if score > MaxScore {
@@ -670,23 +658,23 @@ func (c *NodeCapabilityCollector) detectSpecializedHardware() {
 		}
 	}
 
-	// Check for TPUs (Google Cloud specific)
+	// checks for TPUs (currently only Google Cloud)
 	if output, err := c.executeCommand("ls", "/dev"); err == nil {
 		if strings.Contains(string(output), "accel") {
 			c.capabilities["tpu-accelerated"] = "true"
 		}
 	}
 
-	// Check for other accelerators
+	// checks for accelerators
 	if output, err := c.executeCommand("lspci"); err == nil {
 		outputStr := strings.ToLower(string(output))
 
-		// Check for FPGA
+		// FPGA
 		if strings.Contains(outputStr, "fpga") {
 			c.capabilities["fpga-accelerated"] = "true"
 		}
 
-		// Check for Infiniband
+		// infiniband
 		if strings.Contains(outputStr, "infiniband") {
 			c.capabilities["infiniband"] = "true"
 			c.capabilities["high-bandwidth-network"] = "true"
@@ -694,7 +682,6 @@ func (c *NodeCapabilityCollector) detectSpecializedHardware() {
 	}
 }
 
-// updateNodeLabels updates the node labels with collected capabilities
 func (c *NodeCapabilityCollector) updateNodeLabels(ctx context.Context) error {
 	node, err := c.clientset.CoreV1().Nodes().Get(ctx, c.nodeName, metav1.GetOptions{})
 	if err != nil {
@@ -735,7 +722,6 @@ func (c *NodeCapabilityCollector) updateNodeLabels(ctx context.Context) error {
 	return nil
 }
 
-// Helper method to execute system commands safely
 func (c *NodeCapabilityCollector) executeCommand(command string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -744,7 +730,6 @@ func (c *NodeCapabilityCollector) executeCommand(command string, args ...string)
 	return cmd.Output()
 }
 
-// Helper method to execute commands with sudo if available
 func (c *NodeCapabilityCollector) executeCommandWithSudo(command string, args ...string) ([]byte, error) {
 	if _, err := exec.LookPath("sudo"); err == nil {
 		sudoArgs := append([]string{command}, args...)
@@ -777,15 +762,14 @@ func sanitizeValue(value string) string {
 	return sanitized
 }
 
-// Check if a character is alphanumeric
 func isAlphaNumeric(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
 // Check if a label key is valid for Kubernetes
 func isValidLabelKey(key string) bool {
-	// Label keys have two segments: an optional prefix and name, separated by a slash (/)
-	// The prefix must be a DNS subdomain, and the name must be 63 characters or less
+	// label keys have two segments: an optional prefix and name, separated by a slash
+	// the prefix must be a DNS subdomain, and the name must be 63 characters or less
 	parts := strings.Split(key, "/")
 	if len(parts) > 2 {
 		return false

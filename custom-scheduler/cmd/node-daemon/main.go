@@ -261,7 +261,6 @@ func updateNodeLabels(ctx context.Context, clientset kubernetes.Interface, nodeN
 	}
 }
 
-// startHealthServer starts an HTTP server for health checks
 func startHealthServer(port int, collector *daemon.NodeCapabilityCollector) {
 	mux := http.NewServeMux()
 

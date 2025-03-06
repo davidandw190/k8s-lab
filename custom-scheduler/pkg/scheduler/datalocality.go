@@ -20,7 +20,6 @@ type DataDependency struct {
 	DataType       string
 }
 
-// DataLocalityConfig contains configuration for data locality priority
 type DataLocalityConfig struct {
 	InputDataWeight    float64
 	DataTransferWeight float64
@@ -28,14 +27,12 @@ type DataLocalityConfig struct {
 	DefaultScore       int
 }
 
-// DataLocalityPriority implements pod scheduling based on data locality
 type DataLocalityPriority struct {
 	storageIndex   *storage.StorageIndex
 	bandwidthGraph *storage.BandwidthGraph
 	config         *DataLocalityConfig
 }
 
-// NewDataLocalityPriority creates a new data locality priority function
 func NewDataLocalityPriority(
 	storageIndex *storage.StorageIndex,
 	bandwidthGraph *storage.BandwidthGraph) *DataLocalityPriority {
@@ -109,10 +106,9 @@ func (p *DataLocalityPriority) extractDataDependencies(pod *v1.Pod) ([]DataDepen
 		return inputData, outputData, nil
 	}
 
-	// Process input data dependencies
 	for k, v := range pod.Annotations {
 		if strings.HasPrefix(k, "data.scheduler.thesis/input-") {
-			// Format: urn,size_bytes[,processing_time[,priority[,data_type]]]
+			// format: urn,size_bytes[,processing_time[,priority[,data_type]]]
 			parts := strings.Split(v, ",")
 			if len(parts) < 2 {
 				parseErrors = append(parseErrors, fmt.Sprintf("invalid format for %s: %s (need at least URN,size)", k, v))
@@ -131,7 +127,7 @@ func (p *DataLocalityPriority) extractDataDependencies(pod *v1.Pod) ([]DataDepen
 				size = 1024 * 1024 // 1MB default
 			}
 
-			// Parse optional processing time
+			// optional processing time
 			processingTime := 0
 			if len(parts) > 2 {
 				if pt, err := strconv.Atoi(strings.TrimSpace(parts[2])); err == nil {
@@ -139,15 +135,15 @@ func (p *DataLocalityPriority) extractDataDependencies(pod *v1.Pod) ([]DataDepen
 				}
 			}
 
-			// Parse optional priority
-			priority := 3 // Default priority (medium)
+			// optional priority
+			priority := 3 // default medium
 			if len(parts) > 3 {
 				if p, err := strconv.Atoi(strings.TrimSpace(parts[3])); err == nil && p >= 1 && p <= 5 {
 					priority = p
 				}
 			}
 
-			// Parse optional data type
+			// optional data type
 			dataType := "generic"
 			if len(parts) > 4 {
 				dataType = strings.TrimSpace(parts[4])
@@ -161,7 +157,7 @@ func (p *DataLocalityPriority) extractDataDependencies(pod *v1.Pod) ([]DataDepen
 				DataType:       dataType,
 			})
 		} else if strings.HasPrefix(k, "data.scheduler.thesis/output-") {
-			// Format: urn,size_bytes[,processing_time[,priority[,data_type]]]
+			// format: urn,size_bytes[,processing_time[,priority[,data_type]]]
 			parts := strings.Split(v, ",")
 			if len(parts) < 2 {
 				parseErrors = append(parseErrors, fmt.Sprintf("invalid format for %s: %s (need at least URN,size)", k, v))
@@ -180,7 +176,7 @@ func (p *DataLocalityPriority) extractDataDependencies(pod *v1.Pod) ([]DataDepen
 				size = 1024 * 1024 // 1MB default
 			}
 
-			// Parse optional processing time
+			// optional processing time
 			processingTime := 0
 			if len(parts) > 2 {
 				if pt, err := strconv.Atoi(strings.TrimSpace(parts[2])); err == nil {
@@ -188,15 +184,15 @@ func (p *DataLocalityPriority) extractDataDependencies(pod *v1.Pod) ([]DataDepen
 				}
 			}
 
-			// Parse optional priority
-			priority := 3 // Default priority (medium)
+			// optional priority
+			priority := 3 // default medium
 			if len(parts) > 3 {
 				if p, err := strconv.Atoi(strings.TrimSpace(parts[3])); err == nil && p >= 1 && p <= 5 {
 					priority = p
 				}
 			}
 
-			// Parse optional data type
+			// optional data type
 			dataType := "generic"
 			if len(parts) > 4 {
 				dataType = strings.TrimSpace(parts[4])
@@ -257,7 +253,6 @@ func (p *DataLocalityPriority) extractDataDependencies(pod *v1.Pod) ([]DataDepen
 	return inputData, outputData, nil
 }
 
-// calculateInputDataScore calculates the score for input data locality
 func (p *DataLocalityPriority) calculateInputDataScore(inputData []DataDependency, nodeName string) int {
 	if len(inputData) == 0 {
 		return p.config.DefaultScore
@@ -293,7 +288,7 @@ func (p *DataLocalityPriority) calculateInputDataScore(inputData []DataDependenc
 				break
 			}
 
-			// Otherwise calculate transfer time
+			// otherwise we calculate transfer time
 			transferTime := p.bandwidthGraph.EstimateTransferTime(storageNode, nodeName, data.SizeBytes)
 			if transferTime < bestTransferTime {
 				bestTransferTime = transferTime
@@ -317,7 +312,6 @@ func (p *DataLocalityPriority) calculateInputDataScore(inputData []DataDependenc
 	return int(weightedScore / totalWeight)
 }
 
-// calculateOutputDataScore calculates score for output data locality
 func (p *DataLocalityPriority) calculateOutputDataScore(outputData []DataDependency, nodeName string) int {
 	if len(outputData) == 0 {
 		return p.config.DefaultScore
@@ -386,7 +380,6 @@ func calculateDataWeight(data DataDependency) float64 {
 	return weight
 }
 
-// calculateScoreFromTransferTime converts transfer time to a priority score
 func calculateScoreFromTransferTime(transferTime float64, maxScore int) int {
 	if transferTime <= 0.01 {
 		return maxScore
