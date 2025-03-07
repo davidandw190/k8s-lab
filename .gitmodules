@@ -1,0 +1,3 @@
+[submodule "data-locality-scheduler"]
+	path = data-locality-scheduler
+	url = https://github.com/davidandw190/data-locality-scheduler.git
