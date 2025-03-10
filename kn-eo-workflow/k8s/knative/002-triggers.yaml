@@ -1,0 +1,75 @@
+apiVersion: eventing.knative.dev/v1
+kind: Trigger
+metadata:
+  name: ingestion-trigger
+  namespace: eo-workflow
+  labels:
+    app.kubernetes.io/name: ingestion-trigger
+    app.kubernetes.io/part-of: eo-processing-system
+spec:
+  broker: eo-event-broker
+  filter:
+    attributes:
+      type: eo.scene.request
+  subscriber:
+    ref:
+      apiVersion: serving.knative.dev/v1
+      kind: Service
+      name: stac-ingestion
+---
+apiVersion: eventing.knative.dev/v1
+kind: Trigger
+metadata:
+  name: cog-transformer-trigger
+  namespace: eo-workflow
+  labels:
+    app.kubernetes.io/name: cog-transformer-trigger
+    app.kubernetes.io/part-of: eo-processing-system
+spec:
+  broker: eo-event-broker
+  filter:
+    attributes:
+      type: eo.asset.ingested
+  subscriber:
+    ref:
+      apiVersion: serving.knative.dev/v1
+      kind: Service
+      name: cog-transformer
+---
+apiVersion: eventing.knative.dev/v1
+kind: Trigger
+metadata:
+  name: fmask-trigger
+  namespace: eo-workflow
+  labels:
+    app.kubernetes.io/name: fmask-trigger
+    app.kubernetes.io/part-of: eo-processing-system
+spec:
+  broker: eo-event-broker
+  filter:
+    attributes:
+      type: eo.scene.ready
+  subscriber:
+    ref:
+      apiVersion: serving.knative.dev/v1
+      kind: Service
+      name: fmask
+---
+apiVersion: eventing.knative.dev/v1
+kind: Trigger
+metadata:
+  name: fmask-cog-trigger
+  namespace: eo-workflow
+  labels:
+    app.kubernetes.io/name: fmask-cog-trigger
+    app.kubernetes.io/part-of: eo-processing-system
+spec:
+  broker: eo-event-broker
+  filter:
+    attributes:
+      type: eo.fmask.completed
+  subscriber:
+    ref:
+      apiVersion: serving.knative.dev/v1
+      kind: Service
+      name: cog-transformer
