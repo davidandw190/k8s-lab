@@ -20,11 +20,22 @@ spec:
         app: minio
         app.kubernetes.io/name: minio
         app.kubernetes.io/instance: minio
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "minio-role"
+        vault.hashicorp.com/agent-inject-secret-minio-config: "minio/data/data/config"
+        vault.hashicorp.com/agent-inject-template-minio-config: |
+          {{- with secret "minio/data/data/config" -}}
+          export MINIO_ROOT_USER="{{ .Data.data.MINIO_ROOT_USER }}"
+          export MINIO_ROOT_PASSWORD="{{ .Data.data.MINIO_ROOT_PASSWORD }}"
+          {{- end -}}
+        vault.hashicorp.com/address: "http://vault.eo-workflow.svc:8200"
     spec:
       securityContext:
         fsGroup: 1000
         runAsUser: 1000
         runAsGroup: 1000
+      serviceAccountName: minio-vault-auth
       containers:
       - name: minio
         image: quay.io/minio/minio:RELEASE.2023-09-23T03-47-50Z
@@ -34,7 +45,7 @@ spec:
         - "-c"
         args:
         - |
-          # Start MinIO server directly (no waiting for Vault)
+          # Start MinIO server directly (no waiting for Vault for now)
           minio server /data --console-address ":9001" &
 
           # Wait for MinIO to be ready
@@ -43,18 +54,10 @@ spec:
             sleep 2
           done
 
-          # Create required buckets
-          mc alias set myminio http://localhost:9000 "${MINIO_ROOT_USER}" "${MINIO_ROOT_PASSWORD}"
-          mc mb --ignore-existing myminio/raw-assets
-          mc mb --ignore-existing myminio/cog-assets
-          mc mb --ignore-existing myminio/fmask-raw
-          mc mb --ignore-existing myminio/fmask-cog
-
-          # Set appropriate policies
-          mc policy set download myminio/cog-assets
-          mc policy set download myminio/fmask-cog
-
-          echo "MinIO buckets initialized successfully"
+          # Run the bucket creation script
+          echo "${create-buckets.sh}" > /tmp/create-buckets.sh
+          chmod +x /tmp/create-buckets.sh
+          /tmp/create-buckets.sh
 
           # Keep the container running
           wait
@@ -118,4 +121,4 @@ spec:
       - ReadWriteOnce
       resources:
         requests:
-          storage: 20Gi
+          storage: 10Gi

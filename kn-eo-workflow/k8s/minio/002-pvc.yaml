@@ -8,8 +8,6 @@ metadata:
     app.kubernetes.io/instance: minio
     app.kubernetes.io/component: storage
     app.kubernetes.io/part-of: eo-processing-system
-  annotations:
-    description: "Persistent storage for Earth Observation assets"
 spec:
   accessModes:
   - ReadWriteOnce

@@ -18,18 +18,18 @@ data:
   MINIO_COMPRESS_EXTENSIONS: ".txt,.log,.csv,.json,.tar,.xml,.bin,.tif,.tiff"
   MINIO_API_REQUESTS_MAX: "1600"
 
+  ### Optional
   MINIO_NOTIFY_WEBHOOK_ENABLE_eoworkflow: "on"
   MINIO_NOTIFY_WEBHOOK_ENDPOINT_eoworkflow: "http://broker-ingress.knative-eventing.svc.cluster.local/eo-workflow/eo-event-broker"
 
   MINIO_STORAGE_CLASS_STANDARD: "EC:4"
   MINIO_CACHE_EXPIRY_DAYS: "7"
   MINIO_CACHE_EXCLUDE: "*.tmp"
+  ###########
 
   create-buckets.sh: |
     #!/bin/sh
     set -e
-
-    # Wait for MinIO to be ready
     sleep 5
 
     # Create required buckets

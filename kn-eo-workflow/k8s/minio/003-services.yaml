@@ -8,12 +8,6 @@ metadata:
     app.kubernetes.io/instance: minio
     app.kubernetes.io/component: object-storage
     app.kubernetes.io/part-of: eo-processing-system
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-type: nlb
-    service.beta.kubernetes.io/aws-load-balancer-internal: "true"
-    description: "MinIO API and Console access"
-    prometheus.io/scrape: "true"
-    prometheus.io/port: "9000"
 spec:
   type: ClusterIP
   ports:
@@ -38,8 +32,6 @@ metadata:
     app.kubernetes.io/instance: minio
     app.kubernetes.io/component: object-storage
     app.kubernetes.io/part-of: eo-processing-system
-  annotations:
-    description: "Headless service for MinIO statefulset"
 spec:
   clusterIP: None
   publishNotReadyAddresses: true
