@@ -6,7 +6,7 @@ metadata:
   labels:
     app.kubernetes.io/name: eo-event-broker
     app.kubernetes.io/part-of: eo-processing-system
-  annotations: # eventing.knative.dev/broker.class: MTChannelBasedBroker
+  # annotations:  eventing.knative.dev/broker.class: MTChannelBasedBroker
 spec:
   config:
     apiVersion: v1
