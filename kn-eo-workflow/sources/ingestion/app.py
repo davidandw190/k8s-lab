@@ -40,7 +40,7 @@ def get_config():
         'connection_timeout': int(os.getenv('CONNECTION_TIMEOUT', '5')),
         'max_workers': int(os.getenv('MAX_WORKERS', '4')),
         'secure_connection': os.getenv('MINIO_SECURE', 'false').lower() == 'true',
-        'event_source': os.getenv('EVENT_SOURCE', 'eo-workflow/stac-container'),
+        'event_source': os.getenv('EVENT_SOURCE', 'eo-workflow/ingestion'),
         'sink_url': os.getenv('K_SINK'),
         'watch_interval': int(os.getenv('WATCH_INTERVAL', '60')),  # seconds
         'request_queue': os.getenv('REQUEST_QUEUE', 'requests')    # name of queue folder in MinIO
