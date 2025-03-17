@@ -6,9 +6,12 @@ import time
 import logging
 import json
 import uuid
-import threading
-import redis
-from functools import wraps
+import io
+import tempfile
+import numpy as np
+import xarray as xr
+import rioxarray as rxr
+from scipy import ndimage
 from datetime import datetime, timezone
 
 logging.basicConfig(
@@ -17,273 +20,122 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-SECRETS_PATH = '/vault/secrets/minio-config'
-
 def get_config():
     return {
         'minio_endpoint': os.getenv('MINIO_ENDPOINT', 'minio.eo-workflow.svc.cluster.local:9000'),
+        'minio_access_key': os.getenv('MINIO_ACCESS_KEY', 'minioadmin'),
+        'minio_secret_key': os.getenv('MINIO_SECRET_KEY', 'minioadmin'),
         'cog_bucket': os.getenv('COG_BUCKET', 'cog-assets'),
+        'fmask_raw_bucket': os.getenv('FMASK_RAW_BUCKET', 'fmask-raw'),
         'max_retries': int(os.getenv('MAX_RETRIES', '3')),
         'connection_timeout': int(os.getenv('CONNECTION_TIMEOUT', '5')),
         'secure_connection': os.getenv('MINIO_SECURE', 'false').lower() == 'true',
-        'event_source': os.getenv('EVENT_SOURCE', 'eo-workflow/completion-tracker'),
-        'redis_host': os.getenv('REDIS_HOST', 'redis.eo-workflow.svc.cluster.local'),
-        'redis_port': int(os.getenv('REDIS_PORT', '6379')),
-        'redis_key_prefix': os.getenv('REDIS_KEY_PREFIX', 'eo:tracker:'),
-        'redis_key_expiry': int(os.getenv('REDIS_KEY_EXPIRY', '86400'))  # 24 hours
+        'event_source': os.getenv('EVENT_SOURCE', 'eo-workflow/fmask'),
+        'cloud_dilate_size': int(os.getenv('CLOUD_DILATE_SIZE', '3')),
+        'shadow_dilate_size': int(os.getenv('SHADOW_DILATE_SIZE', '3')),
     }
 
-def wait_for_vault_secrets():
-    max_retries = 30
-    retry_count = 0
-    secrets_file = SECRETS_PATH
-    
-    while not os.path.exists(secrets_file):
-        if retry_count >= max_retries:
-            raise RuntimeError("Timed out waiting for Vault secrets")
-        logger.info(f"Waiting for Vault secrets (attempt {retry_count + 1}/{max_retries})...")
-        time.sleep(2)
-        retry_count += 1
-    
-    with open(secrets_file, 'r') as f:
-        for line in f:
-            if line.startswith('export'):
-                key, value = line.replace('export ', '').strip().split('=', 1)
-                os.environ[key.strip()] = value.strip().strip('"\'')
-    
-    logger.info("Vault secrets loaded successfully")
-
-def ensure_vault_secrets(func):
-    initialization_complete = threading.Event()
-    
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        if not initialization_complete.is_set():
-            try:
-                wait_for_vault_secrets()
-                initialization_complete.set()
-            except Exception as e:
-                logger.error(f"Failed to initialize Vault secrets: {str(e)}")
+def initialize_minio_client(config):
+    """Initialize MinIO client with retries"""
+    for attempt in range(config['max_retries']):
+        try:
+            logger.info(f"Initializing MinIO client with endpoint: {config['minio_endpoint']}")
+            client = Minio(
+                config['minio_endpoint'],
+                access_key=config['minio_access_key'],
+                secret_key=config['minio_secret_key'],
+                secure=config['secure_connection']
+            )
+            # Test connection
+            client.list_buckets()
+            logger.info("Successfully connected to MinIO")
+            return client
+        except Exception as e:
+            if attempt == config['max_retries'] - 1:
+                logger.error(f"Failed to initialize MinIO client after {config['max_retries']} attempts: {str(e)}")
                 raise
-        return func(*args, **kwargs)
-    return wrapper
+            logger.warning(f"Attempt {attempt + 1} failed, retrying: {str(e)}")
+            time.sleep(config['connection_timeout'])
 
-class MinioClientManager:
-    def __init__(self, config):
-        self.config = config
-        self.endpoint = config['minio_endpoint']
-        self.max_retries = config['max_retries']
-        self.secure = config['secure_connection']
-        self.connection_timeout = config.get('connection_timeout', 5)
-
-    def get_credentials(self):
+def ensure_bucket(minio_client, bucket_name, config):
+    """Ensure bucket exists with retries"""
+    for attempt in range(config['max_retries']):
         try:
-            access_key = os.getenv("MINIO_ROOT_USER")
-            secret_key = os.getenv("MINIO_ROOT_PASSWORD")
-            
-            logger.info("Checking for Vault-injected MinIO credentials")
-            logger.info(f"MinIO credentials present: access_key={'YES' if access_key else 'NO'}, secret_key={'YES' if secret_key else 'NO'}")
-            
-            if not access_key or not secret_key:
-                logger.error("MinIO credentials not found - ensure Vault injection is working")
-                raise RuntimeError("MinIO credentials not available")
-            
-            return access_key, secret_key
-            
-        except Exception as e:
-            logger.error(f"Error retrieving credentials: {str(e)}")
-            raise RuntimeError(f"Failed to get MinIO credentials: {str(e)}")
-
-    def initialize_client(self):
-        for attempt in range(self.max_retries):
-            try:
-                access_key, secret_key = self.get_credentials()
-                logger.info(f"Initializing MinIO client with endpoint: {self.endpoint}")
-                
-                client = Minio(
-                    self.endpoint,
-                    access_key=access_key,
-                    secret_key=secret_key,
-                    secure=self.secure
-                )
-                
-                client.list_buckets()
-                logger.info("Successfully connected to MinIO")
-                return client
-                
-            except Exception as e:
-                if attempt == self.max_retries - 1:
-                    logger.error(f"Failed to initialize MinIO client after {self.max_retries} attempts: {str(e)}")
-                    raise
-                logger.warning(f"Attempt {attempt + 1} failed, retrying: {str(e)}")
-                time.sleep(self.connection_timeout)
-
-class RedisTracker:
-    def __init__(self, config):
-        self.host = config['redis_host']
-        self.port = config['redis_port']
-        self.key_prefix = config['redis_key_prefix']
-        self.key_expiry = config['redis_key_expiry']
-        self.max_retries = config.get('max_retries', 3)
-        self.connection_timeout = config.get('connection_timeout', 5)
-        self.redis_client = self._initialize_connection()
-        
-    def _initialize_connection(self):
-        for attempt in range(self.max_retries):
-            try:
-                logger.info(f"Connecting to Redis at {self.host}:{self.port}")
-                client = redis.Redis(
-                    host=self.host,
-                    port=self.port,
-                    socket_timeout=self.connection_timeout,
-                    socket_connect_timeout=self.connection_timeout,
-                    retry_on_timeout=True,
-                    decode_responses=True  # Return string values instead of bytes
-                )
-                client.ping()  # Verify connection
-                logger.info("Successfully connected to Redis")
-                return client
-            except Exception as e:
-                if attempt == self.max_retries - 1:
-                    logger.error(f"Failed to connect to Redis after {self.max_retries} attempts: {str(e)}")
-                    raise
-                logger.warning(f"Redis connection attempt {attempt + 1} failed, retrying: {str(e)}")
-                time.sleep(self.connection_timeout)
-    
-    def _get_scene_key(self, request_id, item_id):
-        return f"{self.key_prefix}scene:{request_id}:{item_id}"
-    
-    def _get_processed_key(self, request_id, item_id):
-        """Get Redis key for processed assets of a scene"""
-        return f"{self._get_scene_key(request_id, item_id)}:processed"
-    
-    def _get_expected_key(self, request_id, item_id):
-        """Get Redis key for expected assets of a scene"""
-        return f"{self._get_scene_key(request_id, item_id)}:expected"
-        
-    def _get_complete_key(self, request_id, item_id):
-        """Get Redis key for completion status of a scene"""
-        return f"{self._get_scene_key(request_id, item_id)}:complete"
-        
-    def _get_metadata_key(self, request_id, item_id):
-        """Get Redis key for metadata of a scene"""
-        return f"{self._get_scene_key(request_id, item_id)}:metadata"
-        
-    def set_expected_assets(self, request_id, item_id, assets, metadata=None):
-        try:
-            expected_key = self._get_expected_key(request_id, item_id)
-            processed_key = self._get_processed_key(request_id, item_id)
-            complete_key = self._get_complete_key(request_id, item_id)
-            metadata_key = self._get_metadata_key(request_id, item_id)
-            
-            # Use a pipeline to execute multiple commands atomically
-            with self.redis_client.pipeline() as pipe:
-                # Clear any existing data (in case of reprocessing)
-                pipe.delete(expected_key)
-                
-                # Add all expected assets
-                if assets:
-                    pipe.sadd(expected_key, *assets)
-                
-                # Set expiry for expected assets key
-                pipe.expire(expected_key, self.key_expiry)
-                
-                # Initialize processed assets set if it doesn't exist
-                pipe.expire(processed_key, self.key_expiry)
-                
-                # Set completion flag to 0 (not complete)
-                pipe.set(complete_key, "0")
-                pipe.expire(complete_key, self.key_expiry)
-                
-                # Store metadata if provided
-                if metadata:
-                    pipe.delete(metadata_key)
-                    pipe.hset(metadata_key, mapping=metadata)
-                    pipe.expire(metadata_key, self.key_expiry)
-                
-                # Execute all commands
-                pipe.execute()
-                
-            logger.info(f"Set {len(assets)} expected assets for scene {item_id} (request {request_id})")
+            if not minio_client.bucket_exists(bucket_name):
+                logger.info(f"Creating bucket: {bucket_name}")
+                minio_client.make_bucket(bucket_name)
+                logger.info(f"Successfully created bucket: {bucket_name}")
             return True
-            
         except Exception as e:
-            logger.error(f"Error setting expected assets: {str(e)}")
-            return False
-    
-    def record_asset(self, request_id, item_id, asset_id):
+            if attempt == config['max_retries'] - 1:
+                logger.error(f"Failed to ensure bucket exists after {config['max_retries']} attempts: {str(e)}")
+                raise
+            logger.warning(f"Attempt {attempt + 1} failed, retrying: {str(e)}")
+            time.sleep(config['connection_timeout'])
+
+def download_asset(minio_client, bucket, object_name, config):
+    """Download asset from MinIO with retries"""
+    for attempt in range(config['max_retries']):
         try:
-            processed_key = self._get_processed_key(request_id, item_id)
+            logger.info(f"Downloading asset from bucket: {bucket}, object: {object_name}")
+            response = minio_client.get_object(bucket, object_name)
+            data = response.read()
+            response.close()
+            return data
+        except Exception as e:
+            if attempt == config['max_retries'] - 1:
+                logger.error(f"Failed to download asset after {config['max_retries']} attempts: {str(e)}")
+                raise
+            logger.warning(f"Download attempt {attempt + 1} failed: {str(e)}")
+            time.sleep(config['connection_timeout'])
+
+def upload_fmask(minio_client, fmask_data, bucket, object_name, metadata, config):
+    """Upload FMask to MinIO with retries"""
+    for attempt in range(config['max_retries']):
+        try:
+            ensure_bucket(minio_client, bucket, config)
             
-            # Add the asset to the processed set
-            self.redis_client.sadd(processed_key, asset_id)
-            self.redis_client.expire(processed_key, self.key_expiry)
-            
-            logger.info(f"Recorded asset {asset_id} for scene {item_id} (request {request_id})")
+            minio_client.put_object(
+                bucket,
+                object_name,
+                io.BytesIO(fmask_data),
+                length=len(fmask_data),
+                content_type="image/tiff",
+                metadata=metadata
+            )
+            logger.info(f"Uploaded FMask to bucket: {bucket}, object: {object_name}")
             return True
-            
         except Exception as e:
-            logger.error(f"Error recording asset {asset_id}: {str(e)}")
-            return False
-    
-    def is_complete(self, request_id, item_id):
-        try:
-            # Check if completion has already been flagged
-            complete_key = self._get_complete_key(request_id, item_id)
-            if self.redis_client.get(complete_key) == "1":
-                logger.info(f"Scene {item_id} already marked as complete")
-                return False  # Already marked as complete, no need to trigger again
+            if attempt == config['max_retries'] - 1:
+                logger.error(f"Failed to upload FMask after {config['max_retries']} attempts: {str(e)}")
+                raise
+            logger.warning(f"Upload attempt {attempt + 1} failed: {str(e)}")
+            time.sleep(config['connection_timeout'])
+
+def load_asset_as_xarray(asset_data, asset_id):
+    """Load asset data as xarray DataArray"""
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.tif') as tmp:
+            tmp.write(asset_data)
+            tmp.flush()
             
-            expected_key = self._get_expected_key(request_id, item_id)
-            processed_key = self._get_processed_key(request_id, item_id)
+            da = rxr.open_rasterio(tmp.name, masked=True).load()
+            da = da.squeeze('band', drop=True)
             
-            # Get the expected and processed assets
-            expected_assets = self.redis_client.smembers(expected_key)
-            processed_assets = self.redis_client.smembers(processed_key)
+            # Normalize band values for Sentinel-2
+            # Most bands have reflectance values in 0-10000 range
+            if asset_id.startswith('B'):
+                max_val = float(da.max().values)
+                if max_val > 100:  # Probably in the 0-10000 range
+                    da = da / 10000.0
             
-            # If there are no expected assets, the scene is not complete
-            if not expected_assets:
-                logger.warning(f"No expected assets found for scene {item_id} (request {request_id})")
-                return False
-            
-            # Check if all expected assets have been processed
-            missing_assets = expected_assets - processed_assets
-            is_complete = len(missing_assets) == 0
-            
-            if is_complete:
-                logger.info(f"All {len(expected_assets)} assets have been processed for scene {item_id}")
-                
-                # Mark as complete to avoid duplicate processing
-                self.redis_client.set(complete_key, "1")
-                self.redis_client.expire(complete_key, self.key_expiry)
-                
-                return True
-            else:
-                logger.info(f"Scene {item_id} not yet complete. Missing {len(missing_assets)} assets: {missing_assets}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error checking completion status: {str(e)}")
-            return False
-    
-    def get_scene_metadata(self, request_id, item_id):
-        try:
-            metadata_key = self._get_metadata_key(request_id, item_id)
-            metadata = self.redis_client.hgetall(metadata_key)
-            return metadata
-        except Exception as e:
-            logger.error(f"Error getting scene metadata: {str(e)}")
-            return {}
-    
-    def get_processed_assets(self, request_id, item_id):
-        try:
-            processed_key = self._get_processed_key(request_id, item_id)
-            return self.redis_client.smembers(processed_key)
-        except Exception as e:
-            logger.error(f"Error getting processed assets: {str(e)}")
-            return set()
+            return da
+    except Exception as e:
+        logger.error(f"Error loading asset {asset_id} as xarray: {str(e)}")
+        raise
 
 def create_cloud_event(event_type, data, source):
+    """Create a CloudEvent object"""
     return CloudEvent({
         "specversion": "1.0",
         "type": event_type,
@@ -293,83 +145,155 @@ def create_cloud_event(event_type, data, source):
         "datacontenttype": "application/json",
     }, data)
 
-class CompletionTracker:
-    def __init__(self, minio_client, redis_tracker, config):
-        self.minio_client = minio_client
-        self.redis_tracker = redis_tracker
-        self.config = config
-        self.cog_bucket = config['cog_bucket']
+# Cloud masking utility functions adapted from your centralized workflow
+def compute_ndvi(red, nir):
+    """Compute Normalized Difference Vegetation Index"""
+    return (nir - red) / (nir + red + 1e-10)
 
-    def record_transformed_asset(self, event_data):
-        request_id = event_data.get("request_id", "unknown")
-        item_id = event_data.get("item_id", "unknown")
-        asset_id = event_data.get("asset_id", "unknown")
-        collection = event_data.get("collection", "unknown")
-        
-        logger.info(f"Recording transformed asset: {asset_id} for item: {item_id}, request: {request_id}")
-        
-        self.redis_tracker.record_asset(request_id, item_id, asset_id)
-        
-        is_complete = self.redis_tracker.is_complete(request_id, item_id)
-        if is_complete:
-            logger.info(f"All assets for item {item_id} have been processed!")
-            
-            processed_assets = list(self.redis_tracker.get_processed_assets(request_id, item_id))
-            metadata = self.redis_tracker.get_scene_metadata(request_id, item_id)
-            
-            result = {
-                "request_id": request_id,
-                "item_id": item_id,
-                "collection": collection,
-                "assets": processed_assets,
-                "cog_bucket": self.cog_bucket,
-                "timestamp": int(time.time())
-            }
-            
-            if "bbox" in metadata:
-                try:
-                    result["bbox"] = json.loads(metadata["bbox"])
-                except Exception as e:
-                    logger.warning(f"Could not parse bbox from metadata: {str(e)}")
-            
-            if "acquisition_date" in metadata:
-                result["acquisition_date"] = metadata["acquisition_date"]
-            
-            return result
-        
-        return None
+def compute_ndwi(green, nir):
+    """Compute Normalized Difference Water Index"""
+    return (green - nir) / (green + nir + 1e-10)
 
-    def set_expected_assets(self, event_data):
-        """Set the expected assets for a scene"""
-        request_id = event_data.get("request_id", "unknown")
-        item_id = event_data.get("item_id", "unknown")
-        assets = event_data.get("assets", [])
-        collection = event_data.get("collection", "unknown")
-        
-        metadata = {
-            "collection": collection,
-            "bbox": json.dumps(event_data.get("bbox", [])),
-            "acquisition_date": event_data.get("acquisition_date", ""),
-            "cloud_cover": str(event_data.get("cloud_cover", "")),
-            "asset_count": str(len(assets))
-        }
-        
-        logger.info(f"Setting {len(assets)} expected assets for item: {item_id}, request: {request_id}")
-        
-        self.redis_tracker.set_expected_assets(request_id, item_id, assets, metadata)
-        
-        return {
-            "request_id": request_id,
-            "item_id": item_id,
-            "collection": collection,
-            "assets_count": len(assets),
-            "status": "registered"
-        }
+def compute_mndwi(green, swir):
+    """Compute Modified Normalized Difference Water Index"""
+    return (green - swir) / (green + swir + 1e-10)
 
-# @ensure_vault_secrets
+def compute_cloud_shadow_mask(ds, config):
+    """
+    Generate cloud and shadow mask from a dataset of bands
+    Adapted from the Sentinel2Analyzer.compute_enhanced_land_cover method
+    """
+    logger.info("Computing cloud and shadow mask")
+    
+    # Extract bands (normalized to 0-1 range)
+    blue = ds['B02'].values
+    green = ds['B03'].values
+    red = ds['B04'].values
+    nir = ds['B08'].values
+    
+    # For SWIR bands, check if they exist
+    if 'B11' in ds and 'B12' in ds:
+        swir1 = ds['B11'].values
+        swir2 = ds['B12'].values
+        has_swir = True
+    else:
+        swir1 = None
+        swir2 = None
+        has_swir = False
+    
+    # Get SCL band if available
+    if 'SCL' in ds:
+        scl = ds['SCL'].values.astype(np.uint8)
+        has_scl = True
+    else:
+        scl = None
+        has_scl = False
+    
+    # Compute indices
+    ndvi = compute_ndvi(red, nir)
+    ndwi = compute_ndwi(green, nir)
+    
+    if has_swir:
+        mndwi = compute_mndwi(green, swir1)
+    else:
+        mndwi = None
+    
+    # Water detection
+    if has_scl:
+        water_scl = (scl == 6)
+    else:
+        water_scl = np.zeros_like(ndvi, dtype=bool)
+    
+    water_spectral = ndwi > 0.2
+    if mndwi is not None:
+        water_spectral = water_spectral | (mndwi > 0.2)
+    
+    water_mask = water_scl | (water_spectral & (nir < 0.15) & (blue > red))
+    
+    # Cloud detection
+    if has_scl:
+        cloud_scl = np.isin(scl, [8, 9, 10])
+    else:
+        cloud_scl = np.zeros_like(ndvi, dtype=bool)
+    
+    bright_pixels = (blue > 0.2) & (green > 0.2) & (red > 0.2)
+    spectral_cloud = (ndvi < 0.1) & bright_pixels & (blue > red)
+    
+    if has_swir:
+        cirrus_test = (swir1 < 0.1) & bright_pixels
+        spectral_cloud = spectral_cloud | cirrus_test
+    
+    cloud_mask = cloud_scl | spectral_cloud
+    
+    # Dilate clouds to catch edges
+    if config['cloud_dilate_size'] > 0:
+        cloud_mask = ndimage.binary_opening(cloud_mask, iterations=1)
+        cloud_mask = ndimage.binary_dilation(cloud_mask, iterations=config['cloud_dilate_size'])
+    
+    # Shadow detection
+    if has_scl:
+        shadow_scl = (scl == 3)
+    else:
+        shadow_scl = np.zeros_like(ndvi, dtype=bool)
+    
+    nir_dark = (nir < 0.1)
+    if has_swir:
+        swir_dark = (swir1 < 0.1)
+    else:
+        swir_dark = np.zeros_like(ndvi, dtype=bool)
+    
+    dark_pixels = nir_dark & (red < 0.1) & (blue < 0.1)
+    shadow_mask = shadow_scl | (dark_pixels & ~water_mask & ~cloud_mask)
+    
+    # Dilate shadows
+    shadow_mask = ndimage.binary_opening(shadow_mask, iterations=1)
+    if config['shadow_dilate_size'] > 0:
+        shadow_mask = ndimage.binary_dilation(shadow_mask, iterations=config['shadow_dilate_size'])
+    
+    # Create final mask
+    # 0 = clear, 1 = water, 2 = cloud shadow, 3 = cloud
+    fmask = np.zeros_like(ndvi, dtype=np.uint8)
+    fmask[water_mask] = 1
+    fmask[shadow_mask] = 2
+    fmask[cloud_mask] = 3
+    
+    logger.info(f"Generated FMask with shape {fmask.shape}")
+    logger.info(f"Clear pixels: {np.sum(fmask == 0)}")
+    logger.info(f"Water pixels: {np.sum(fmask == 1)}")
+    logger.info(f"Shadow pixels: {np.sum(fmask == 2)}")
+    logger.info(f"Cloud pixels: {np.sum(fmask == 3)}")
+    
+    return fmask
+
+def save_fmask_to_tiff(fmask, reference_da):
+    """Save FMask as GeoTIFF using reference DataArray for geospatial info"""
+    try:
+        # Create a new DataArray with the same coordinates and CRS as the reference
+        mask_da = xr.DataArray(
+            fmask,
+            dims=reference_da.dims,
+            coords=reference_da.coords,
+            attrs={'long_name': 'Cloud and shadow mask', 'units': 'class'}
+        )
+        
+        # Set the CRS from the reference DataArray
+        if hasattr(reference_da, 'rio'):
+            mask_da.rio.write_crs(reference_da.rio.crs, inplace=True)
+        
+        # Save to a temporary file and read back as bytes
+        with tempfile.NamedTemporaryFile(suffix='.tif') as tmp:
+            mask_da.rio.to_raster(tmp.name, driver="GTiff")
+            tmp.flush()
+            
+            with open(tmp.name, 'rb') as f:
+                return f.read()
+    except Exception as e:
+        logger.error(f"Error saving FMask to TIFF: {str(e)}")
+        raise
+
 def main(context: Context):
     try:
-        logger.info("Completion Tracker function activated")
+        logger.info("FMask function activated")
         config = get_config()
         
         if not hasattr(context, 'cloud_event'):
@@ -381,53 +305,94 @@ def main(context: Context):
         if isinstance(event_data, str):
             event_data = json.loads(event_data)
         
-        event_type = context.cloud_event["type"]
+        # Extract scene details
+        request_id = event_data.get("request_id")
+        item_id = event_data.get("item_id")
+        collection = event_data.get("collection")
+        cog_bucket = event_data.get("cog_bucket")
+        assets = event_data.get("assets", [])
         
-        minio_manager = MinioClientManager(config)
-        minio_client = minio_manager.initialize_client()
-        redis_tracker = RedisTracker(config)
-        tracker = CompletionTracker(minio_client, redis_tracker, config)
+        logger.info(f"Processing FMask for scene {item_id}, collection {collection}")
+        logger.info(f"Available assets: {assets}")
         
-        if event_type == "eo.scene.assets.registered":
-            result = tracker.set_expected_assets(event_data)
-            return {"status": "recorded_expectations", 
-                    "request_id": event_data.get("request_id"),
-                    "item_id": event_data.get("item_id"),
-                    "assets_count": len(event_data.get("assets", []))}, 200
-            
-        elif event_type == "eo.asset.transformed":
-            completion_result = tracker.record_transformed_asset(event_data)
-            
-            if completion_result:
-                response_event = create_cloud_event(
-                    "eo.scene.ready",
-                    completion_result,
-                    config['event_source']
-                )
-                logger.info(f"Emitting eo.scene.ready event for item {completion_result['item_id']}")
-                return response_event
-            else:
-                return {
-                    "status": "asset_recorded", 
-                    "asset_id": event_data.get("asset_id"),
-                    "item_id": event_data.get("item_id"),
-                    "request_id": event_data.get("request_id")
-                }, 200
+        required_bands = ['B02', 'B03', 'B04', 'B08']
         
-        else:
-            logger.warning(f"Unknown event type: {event_type}")
-            return {"error": f"Unknown event type: {event_type}"}, 400
+        missing_bands = [band for band in required_bands if band not in assets]
+        if missing_bands:
+            error_msg = f"Missing required bands: {missing_bands}"
+            logger.error(error_msg)
+            error_data = {
+                "error": error_msg,
+                "error_type": "MissingBandsError",
+                "request_id": request_id,
+                "item_id": item_id
+            }
+            return create_cloud_event("eo.processing.error", error_data, config['event_source'])
+        
+        minio_client = initialize_minio_client(config)
+        
+        data_vars = {}
+        for asset_id in assets:
+            try:
+                object_name = f"{collection}/{item_id}/{asset_id}"
+                
+                asset_data = download_asset(minio_client, cog_bucket, object_name, config)
+                
+                data_vars[asset_id] = load_asset_as_xarray(asset_data, asset_id)
+                logger.info(f"Loaded asset {asset_id} with shape {data_vars[asset_id].shape}")
+            except Exception as e:
+                logger.error(f"Error processing asset {asset_id}: {str(e)}")
+        
+        ds = xr.Dataset(data_vars)
+        fmask = compute_cloud_shadow_mask(ds, config)
+        
+        reference_da = data_vars[required_bands[0]]
+        fmask_tiff = save_fmask_to_tiff(fmask, reference_da)
+        fmask_object = f"{collection}/{item_id}/fmask"
+        
+        metadata = {
+            "item_id": item_id,
+            "collection": collection,
+            "request_id": request_id,
+            "content_type": "image/tiff",
+            "timestamp": str(int(time.time())),
+            "classes": "0=clear,1=water,2=shadow,3=cloud"
+        }
+        
+        upload_fmask(minio_client, fmask_tiff, config['fmask_raw_bucket'], fmask_object, metadata, config)
+        
+        result = {
+            "request_id": request_id,
+            "item_id": item_id,
+            "collection": collection,
+            "bucket": config['fmask_raw_bucket'],
+            "object_name": fmask_object,
+            "asset_id": "fmask",
+            "timestamp": int(time.time())
+        }
+        
+        response_event = create_cloud_event(
+            "eo.fmask.completed",
+            result,
+            config['event_source']
+        )
+        
+        logger.info(f"FMask processing completed for scene {item_id}")
+        return response_event
         
     except Exception as e:
-        logger.exception(f"Error in completion tracker function: {str(e)}")
+        logger.exception(f"Error in FMask function: {str(e)}")
         error_data = {
             "error": str(e),
             "error_type": type(e).__name__,
-            "request_id": event_data.get("request_id") if "event_data" in locals() else str(uuid.uuid4())
+            "request_id": event_data.get("request_id") if "event_data" in locals() else str(uuid.uuid4()),
+            "item_id": event_data.get("item_id") if "event_data" in locals() else "unknown"
         }
+        
         error_event = create_cloud_event(
             "eo.processing.error",
             error_data,
             config['event_source']
         )
+        
         return error_event
