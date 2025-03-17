@@ -38,6 +38,7 @@ data:
     mc mb --ignore-existing myminio/cog-assets
     mc mb --ignore-existing myminio/fmask-raw
     mc mb --ignore-existing myminio/fmask-cog
+    mc mb --ignore-existing myminio/requests
 
     # Set appropriate policies
     mc policy set download myminio/cog-assets

@@ -38,7 +38,7 @@ spec:
       serviceAccountName: minio-vault-auth
       containers:
       - name: minio
-        image: quay.io/minio/minio:RELEASE.2023-09-23T03-47-50Z
+        image: quay.io/minio/minio:RELEASE.2024-05-10T01-41-38Z.hotfix.5c0012bcd
         imagePullPolicy: IfNotPresent
         command:
         - "/bin/sh"

@@ -1,25 +1,6 @@
 apiVersion: eventing.knative.dev/v1
 kind: Trigger
 metadata:
-  name: stac-ingestion-trigger
-  namespace: eo-workflow
-  labels:
-    app.kubernetes.io/name: stac-ingestion-trigger
-    app.kubernetes.io/part-of: eo-processing-system
-spec:
-  broker: eo-event-broker
-  filter:
-    attributes:
-      type: eo.scene.request
-  subscriber:
-    ref:
-      apiVersion: serving.knative.dev/v1
-      kind: Service
-      name: stac-ingestion
----
-apiVersion: eventing.knative.dev/v1
-kind: Trigger
-metadata:
   name: cog-transformer-trigger
   namespace: eo-workflow
   labels:
