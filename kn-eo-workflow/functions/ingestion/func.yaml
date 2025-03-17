@@ -4,7 +4,6 @@ runtime: python
 created: 2025-03-15T12:04:51.456770958+02:00
 registry: docker.io/davidandw190
 image: docker.io/davidandw190/ingestion:latest
-namespace: eo-workflow
 build:
   builder: pack
   buildEnvs:
