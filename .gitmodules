@@ -1,3 +1,6 @@
 [submodule "data-locality-scheduler"]
 	path = data-locality-scheduler
 	url = https://github.com/davidandw190/data-locality-scheduler.git
+[submodule "kn-eo-workflow"]
+	path = kn-eo-workflow
+	url = https://github.com/davidandw190/kn-eo-workflow.git
